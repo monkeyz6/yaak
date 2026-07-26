@@ -18,14 +18,12 @@ type ModelTypeWithSetting<K extends RequestSettingKey> = {
   [M in ModelType]: K extends keyof ModelForType<M> ? M : never;
 }[ModelType];
 
-export type RequestSettingDefinition<
-  K extends RequestSettingKey = RequestSettingKey,
-> = {
+export type RequestSettingDefinition<K extends RequestSettingKey = RequestSettingKey> = {
   defaultValue: WorkspaceRequestSettings[K];
-  description: string;
+  descriptionKey: string;
   modelKey: K;
   models: readonly ModelTypeWithSetting<K>[];
-  title: string;
+  titleKey: string;
 };
 
 export type RequestSettingKey = keyof WorkspaceRequestSettings;
@@ -38,59 +36,50 @@ function defineRequestSetting<const K extends RequestSettingKey>(
 
 export const SETTING_REQUEST_TIMEOUT = defineRequestSetting({
   defaultValue: 0,
-  description: "Maximum request duration in milliseconds. Set to 0 to disable.",
+  descriptionKey: "requestSettings.requestTimeoutDescription",
   modelKey: "settingRequestTimeout",
   models: ["workspace", "folder", "http_request"],
-  title: "Request Timeout",
+  titleKey: "requestSettings.requestTimeoutTitle",
 });
 
 export const SETTING_REQUEST_MESSAGE_SIZE = defineRequestSetting({
   defaultValue: 64 * 1024 * 1024,
-  description:
-    "Maximum gRPC or WebSocket message size in MB. Set to 0 to disable.",
+  descriptionKey: "requestSettings.messageSizeLimitDescription",
   modelKey: "settingRequestMessageSize",
   models: ["workspace", "folder", "websocket_request", "grpc_request"],
-  title: "Message Size Limit",
+  titleKey: "requestSettings.messageSizeLimitTitle",
 });
 
 export const SETTING_VALIDATE_CERTIFICATES = defineRequestSetting({
   defaultValue: true,
-  description: "When disabled, skip validation of server certificates.",
+  descriptionKey: "requestSettings.validateCertificatesDescription",
   modelKey: "settingValidateCertificates",
-  models: [
-    "workspace",
-    "folder",
-    "http_request",
-    "websocket_request",
-    "grpc_request",
-  ],
-  title: "Validate TLS certificates",
+  models: ["workspace", "folder", "http_request", "websocket_request", "grpc_request"],
+  titleKey: "requestSettings.validateCertificatesTitle",
 });
 
 export const SETTING_FOLLOW_REDIRECTS = defineRequestSetting({
   defaultValue: true,
-  description: "Follow HTTP redirects automatically.",
+  descriptionKey: "requestSettings.followRedirectsDescription",
   modelKey: "settingFollowRedirects",
   models: ["workspace", "folder", "http_request"],
-  title: "Follow redirects",
+  titleKey: "requestSettings.followRedirectsTitle",
 });
 
 export const SETTING_SEND_COOKIES = defineRequestSetting({
   defaultValue: true,
-  description:
-    "Attach matching cookies from the active cookie jar to outgoing requests.",
+  descriptionKey: "requestSettings.sendCookiesDescription",
   modelKey: "settingSendCookies",
   models: ["workspace", "folder", "http_request", "websocket_request"],
-  title: "Automatically send cookies",
+  titleKey: "requestSettings.sendCookiesTitle",
 });
 
 export const SETTING_STORE_COOKIES = defineRequestSetting({
   defaultValue: true,
-  description:
-    "Save cookies from Set-Cookie response headers to the active cookie jar.",
+  descriptionKey: "requestSettings.storeCookiesDescription",
   modelKey: "settingStoreCookies",
   models: ["workspace", "folder", "http_request", "websocket_request"],
-  title: "Automatically store cookies",
+  titleKey: "requestSettings.storeCookiesTitle",
 });
 
 export function modelSupportsSetting<K extends RequestSettingKey>(

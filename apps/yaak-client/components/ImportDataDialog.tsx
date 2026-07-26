@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { VStack } from "@yaakapp-internal/ui";
 import { useState } from "react";
 import { useLocalStorage } from "react-use";
@@ -10,12 +11,13 @@ interface Props {
 }
 
 export function ImportDataDialog({ importData }: Props) {
+  const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [filePath, setFilePath] = useLocalStorage<string | null>("importFilePath", null);
 
   return (
     <VStack space={5} className="pb-4">
-      <CommercialUseBanner source="data-import" title="Importing work data?" />
+      <CommercialUseBanner source="data-import" title={t("importExport.importingWorkData")} />
 
       <VStack space={1}>
         <ul className="list-disc pl-5">
@@ -24,7 +26,8 @@ export function ImportDataDialog({ importData }: Props) {
           <li>Insomnia v4+</li>
           <li>Swagger 2.0</li>
           <li>
-            Curl commands <em className="text-text-subtle">(or paste into URL)</em>
+            {t("importExport.curlCommands")}{" "}
+            <em className="text-text-subtle">{t("importExport.curlPasteHint")}</em>
           </li>
         </ul>
       </VStack>
@@ -48,7 +51,7 @@ export function ImportDataDialog({ importData }: Props) {
               }
             }}
           >
-            {isLoading ? "Importing" : "Import"}
+            {isLoading ? t("importExport.importing") : t("importExport.import")}
           </Button>
         )}
       </VStack>

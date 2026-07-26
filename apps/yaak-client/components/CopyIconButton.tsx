@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { IconButton, type IconButtonProps, useTimedBoolean } from "@yaakapp-internal/ui";
 import { copyToClipboard } from "../lib/copy";
 import { showToast } from "../lib/toast";
@@ -7,6 +8,7 @@ interface Props extends Omit<IconButtonProps, "onClick" | "icon"> {
 }
 
 export function CopyIconButton({ text, ...props }: Props) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useTimedBoolean();
   return (
     <IconButton
@@ -19,7 +21,7 @@ export function CopyIconButton({ text, ...props }: Props) {
           showToast({
             id: "failed-to-copy",
             color: "danger",
-            message: "Failed to copy",
+            message: t("response.failedToCopy"),
           });
         } else {
           copyToClipboard(content, { disableToast: true });

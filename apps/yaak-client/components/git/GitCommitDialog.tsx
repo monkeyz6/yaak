@@ -1,5 +1,6 @@
 import type { GitStatusEntry } from "@yaakapp-internal/git";
 import { useGit } from "@yaakapp-internal/git";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type {
   Environment,
   Folder,
@@ -42,11 +43,9 @@ interface CommitTreeNode {
 }
 
 export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
+  const { t } = useTranslation();
   const callbacks = useGitCallbacks(syncDir);
-  const [{ status }, { commit, commitAndPush, add, unstage, restore }] = useGit(
-    syncDir,
-    callbacks,
-  );
+  const [{ status }, { commit, commitAndPush, add, unstage, restore }] = useGit(syncDir, callbacks);
   const [isPushing, setIsPushing] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [message, setMessage] = useState<string>("");
@@ -73,7 +72,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
     } catch (err) {
       showErrorToast({
         id: "git-commit-and-push-error",
-        title: "Error committing and pushing",
+        title: t("git.commitAndPushError"),
         message: String(err),
       });
     } finally {
@@ -176,9 +175,9 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
     async (entry: GitStatusEntry) => {
       const confirmed = await showConfirm({
         id: "git-restore-commit-entry",
-        title: "Discard Changes",
-        description: "Do you really want to discard uncommitted changes for the selected item?",
-        confirmText: "Discard",
+        title: t("git.discardChanges"),
+        description: t("git.discardChangesDescription"),
+        confirmText: t("git.discard"),
         color: "danger",
       });
       if (!confirmed) return;
@@ -187,7 +186,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
       await sync({ force: true });
       setSelectedEntry(null);
     },
-    [restore],
+    [restore, t],
   );
 
   if (tree == null) {
@@ -197,7 +196,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
   if (!hasAnythingToAdd) {
     return (
       <div className="h-full px-6 pb-4">
-        <EmptyStateText>No changes since last commit</EmptyStateText>
+        <EmptyStateText>{t("git.noChangesSinceLastCommit")}</EmptyStateText>
       </div>
     );
   }
@@ -210,7 +209,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
         defaultRatio={0.6}
         firstSlot={({ style }) => (
           <div style={style} className="h-full px-4 flex flex-col gap-3">
-            <CommercialUseBanner source="git-commit" title="Using Git for work?" />
+            <CommercialUseBanner source="git-commit" title={t("git.usingGitForWork")} />
             <SplitLayout
               className="min-h-0 flex-1"
               storageKey="commit-vertical"
@@ -230,7 +229,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
                   />
                   {externalEntries.find((e) => e.status !== "current") && (
                     <>
-                      <Separator className="mt-3 mb-1">Other files</Separator>
+                      <Separator className="mt-3 mb-1">{t("git.otherFiles")}</Separator>
                       {externalEntries.map((entry) => (
                         <ExternalTreeNode
                           key={entry.relaPath + entry.status}
@@ -244,16 +243,13 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
                 </div>
               )}
               secondSlot={({ style: innerStyle }) => (
-                <div
-                  style={innerStyle}
-                  className="grid grid-rows-[minmax(0,1fr)_auto] gap-3 pb-2"
-                >
+                <div style={innerStyle} className="grid grid-rows-[minmax(0,1fr)_auto] gap-3 pb-2">
                   <Input
                     className="text-base! font-sans rounded-md"
-                    placeholder="Commit message..."
+                    placeholder={t("git.commitMessagePlaceholder")}
                     onChange={setMessage}
                     stateKey={null}
-                    label="Commit message"
+                    label={t("git.commitMessage")}
                     fullHeight
                     multiLine
                     hideLabel
@@ -269,7 +265,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
                         disabled={!hasAddedAnything || message.trim().length === 0}
                         isLoading={isPushing}
                       >
-                        Commit
+                        {t("git.commit")}
                       </Button>
                       <Button
                         color="primary"
@@ -278,7 +274,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
                         onClick={handleCreateCommitAndPush}
                         isLoading={isPushing}
                       >
-                        Commit and Push
+                        {t("git.commitAndPush")}
                       </Button>
                     </HStack>
                   </HStack>
@@ -292,7 +288,7 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
             {selectedEntry ? (
               <DiffPanel entry={selectedEntry} onDiscardChanges={handleDiscardChanges} />
             ) : (
-              <EmptyStateText>Select a change to view diff</EmptyStateText>
+              <EmptyStateText>{t("git.selectChangeToViewDiff")}</EmptyStateText>
             )}
           </div>
         )}
@@ -314,6 +310,7 @@ function TreeNodeChildren({
   onSelect: (entry: GitStatusEntry) => void;
   selectedPath: string | null;
 }) {
+  const { t } = useTranslation();
   if (node === null) return null;
   if (!isNodeRelevant(node)) return null;
 
@@ -337,7 +334,7 @@ function TreeNodeChildren({
         )}
         <Checkbox
           checked={checked}
-          title={checked ? "Unstage change" : "Stage change"}
+          title={checked ? t("git.unstageChange") : t("git.stageChange")}
           hideLabel
           onChange={(checked) => onCheck(node, checked)}
         />
@@ -511,6 +508,7 @@ function DiffPanel({
   entry: GitStatusEntry;
   onDiscardChanges: (entry: GitStatusEntry) => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const prevYaml = modelToYaml(entry.prev);
   const nextYaml = modelToYaml(entry.next);
 
@@ -526,13 +524,11 @@ function DiffPanel({
           size="2xs"
           variant="border"
           onClick={() => onDiscardChanges(entry)}
-        >Discard Changes</Button>
+        >
+          {t("git.discardChanges")}
+        </Button>
       </div>
-      <DiffViewer
-        original={prevYaml ?? ""}
-        modified={nextYaml ?? ""}
-        className="flex-1 min-h-0"
-      />
+      <DiffViewer original={prevYaml ?? ""} modified={nextYaml ?? ""} className="flex-1 min-h-0" />
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { Environment } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import type { GenericCompletionOption } from "@yaakapp-internal/plugins";
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export function EnvironmentEditor({ environment, hideName, className, setRef }: Props) {
+  const { t } = useTranslation();
   const workspaceId = environment.workspaceId;
   const isEncryptionEnabled = useIsEncryptionEnabled();
   const valueVisibility = useKeyValue<boolean>({
@@ -114,16 +116,16 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
           {isEncryptionEnabled ? (
             !allVariableAreEncrypted ? (
               <PillButton color="notice" onClick={() => encryptEnvironment(environment)}>
-                Encrypt All Variables
+                {t("environment.encryptAllVariables")}
               </PillButton>
             ) : (
               <PillButton color="secondary" onClick={setupOrConfigureEncryption}>
-                Encryption Settings
+                {t("environment.encryptionSettings")}
               </PillButton>
             )
           ) : (
             <PillButton color="secondary" onClick={() => valueVisibility.set((v) => !v)}>
-              {valueVisibility.value ? "Hide Values" : "Show Values"}
+              {valueVisibility.value ? t("environment.hideValues") : t("environment.showValues")}
             </PillButton>
           )}
           <PillButton
@@ -133,7 +135,7 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
               await patchModel(environment, { public: !environment.public });
             }}
           >
-            {environment.public ? "Sharable" : "Private"}
+            {environment.public ? t("environment.sharable") : t("environment.private")}
           </PillButton>
         </Heading>
         {environment.public && (!isEncryptionEnabled || !allVariableAreEncrypted) && (
@@ -143,13 +145,13 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
             className="mr-3"
             actions={[
               {
-                label: "Encrypt Variables",
+                label: t("environment.encryptVariables"),
                 onClick: () => encryptEnvironment(environment),
                 color: "success",
               },
             ]}
           >
-            This sharable environment contains plain-text secrets
+            {t("environment.plainTextSecretsWarning")}
           </DismissibleBanner>
         )}
       </div>

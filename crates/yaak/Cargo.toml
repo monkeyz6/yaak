@@ -6,9 +6,11 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22.1"
 log = { workspace = true }
 md5 = "0.8.0"
 serde_json = { workspace = true }
+serde_json_path = "0.7.2"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt"] }
 yaak-http = { workspace = true }

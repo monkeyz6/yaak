@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { Folder, GrpcRequest, HttpRequest, WebsocketRequest } from "@yaakapp-internal/models";
 import { foldersAtom } from "@yaakapp-internal/models";
 import { Heading, HStack, Icon, LoadingIcon } from "@yaakapp-internal/ui";
@@ -26,6 +27,7 @@ interface Props {
 }
 
 export function FolderLayout({ folder, style }: Props) {
+  const { t } = useTranslation();
   const folders = useAtomValue(foldersAtom);
   const requests = useAtomValue(allRequestsAtom);
   const folderActions = useFolderActions();
@@ -59,7 +61,7 @@ export function FolderLayout({ folder, style }: Props) {
             onClick={handleSendAll}
             disabled={sendAllAction == null}
           >
-            Send All
+            {t("contextMenu.sendAll")}
           </Button>
         </HStack>
       </HStack>
@@ -74,6 +76,7 @@ export function FolderLayout({ folder, style }: Props) {
 }
 
 function ChildCard({ child }: { child: Folder | HttpRequest | GrpcRequest | WebsocketRequest }) {
+  const { t } = useTranslation();
   let card: ReactNode;
   if (child.model === "folder") {
     card = <FolderCard folder={child} />;
@@ -84,7 +87,7 @@ function ChildCard({ child }: { child: Folder | HttpRequest | GrpcRequest | Webs
   } else if (child.model === "websocket_request") {
     card = <RequestCard request={child} />;
   } else {
-    card = <div>Unknown model</div>;
+    card = <div>{t("common.unknownModel")}</div>;
   }
 
   const navigate = useCallback(async () => {
@@ -110,7 +113,7 @@ function ChildCard({ child }: { child: Folder | HttpRequest | GrpcRequest | Webs
         <HStack space={0.5} className="ml-auto -mr-1.5">
           <IconButton
             color="custom"
-            title="Send Request"
+            title={t("navigation.sendRequest")}
             size="sm"
             icon="external_link"
             className="opacity-70 hover:opacity-100"
@@ -118,7 +121,7 @@ function ChildCard({ child }: { child: Folder | HttpRequest | GrpcRequest | Webs
           />
           <IconButton
             color="custom"
-            title="Send Request"
+            title={t("navigation.sendRequest")}
             size="sm"
             icon="send_horizontal"
             className="opacity-70 hover:opacity-100"
@@ -134,6 +137,7 @@ function ChildCard({ child }: { child: Folder | HttpRequest | GrpcRequest | Webs
 }
 
 function FolderCard({ folder }: { folder: Folder }) {
+  const { t } = useTranslation();
   return (
     <div>
       <Button
@@ -148,7 +152,7 @@ function FolderCard({ folder }: { folder: Folder }) {
           });
         }}
       >
-        Open
+        {t("common.open")}
       </Button>
     </div>
   );
@@ -159,6 +163,7 @@ function RequestCard({ request }: { request: HttpRequest | GrpcRequest | Websock
 }
 
 function HttpRequestCard({ request }: { request: HttpRequest }) {
+  const { t } = useTranslation();
   const latestResponse = useLatestHttpResponse(request.id);
 
   return (
@@ -175,7 +180,7 @@ function HttpRequestCard({ request }: { request: HttpRequest }) {
             e.stopPropagation();
             showDialog({
               id: "response-preview",
-              title: "Response Preview",
+              title: t("response.responsePreview"),
               size: "md",
               className: "h-full",
               render: () => {
@@ -205,7 +210,7 @@ function HttpRequestCard({ request }: { request: HttpRequest }) {
           </HStack>
         </button>
       ) : (
-        <div>No Responses</div>
+        <div>{t("response.noResponses")}</div>
       )}
     </div>
   );

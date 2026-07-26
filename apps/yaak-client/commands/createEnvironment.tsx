@@ -1,3 +1,4 @@
+import { i18n } from "@yaakapp-internal/i18n";
 import type { Environment } from "@yaakapp-internal/models";
 import { CreateEnvironmentDialog } from "../components/CreateEnvironmentDialog";
 import { activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
@@ -25,8 +26,8 @@ export const createSubEnvironmentAndActivate = createFastMutation<
     return new Promise<string | null>((resolve) => {
       showDialog({
         id: "new-environment",
-        title: "New Environment",
-        description: "Create multiple environments with different sets of variables",
+        title: i18n.t("environment.newEnvironment"),
+        description: i18n.t("environment.newEnvironmentDescription"),
         size: "sm",
         onClose: () => resolve(null),
         render: ({ hide }) => (

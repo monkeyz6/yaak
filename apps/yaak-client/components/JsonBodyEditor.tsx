@@ -2,6 +2,7 @@ import { linter } from "@codemirror/lint";
 import type { HttpRequest } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import { Banner, Icon } from "@yaakapp-internal/ui";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { useCallback, useMemo } from "react";
 import { useKeyValue } from "../hooks/useKeyValue";
 import { fireAndForget } from "../lib/fireAndForget";
@@ -13,6 +14,8 @@ import { jsonParseLinter } from "./core/Editor/json-lint";
 import { Editor } from "./core/Editor/LazyEditor";
 import { IconButton } from "./core/IconButton";
 import { IconTooltip } from "./core/IconTooltip";
+import { showDialog } from "../lib/dialog";
+import { AiRequestConversionDialog } from "./AiRequestConversionDialog";
 
 interface Props {
   forceUpdateKey: string;
@@ -21,6 +24,7 @@ interface Props {
 }
 
 export function JsonBodyEditor({ forceUpdateKey, heightMode, request }: Props) {
+  const { t } = useTranslation();
   const handleChange = useCallback(
     (text: string) => patchModel(request, { body: { ...request.body, text } }),
     [request],
@@ -69,13 +73,13 @@ export function JsonBodyEditor({ forceUpdateKey, heightMode, request }: Props) {
 
   const showBanner = hasComments && autoFix && !bannerDismissed;
 
-  const stripMessage = "Automatically strip comments and trailing commas before sending";
+  const stripMessage = t("jsonEditor.autoFixHelp");
   const actions = useMemo<EditorProps["actions"]>(
     () => [
       showBanner && (
         <Banner color="notice" className="opacity-100! h-sm py-0! px-2! flex items-center text-xs">
           <p className="inline-flex items-center gap-1 min-w-0">
-            <span className="truncate">Auto-fix enabled</span>
+            <span className="truncate">{t("jsonEditor.autoFixEnabled")}</span>
             <Icon icon="arrow_right" size="sm" className="opacity-disabled" />
           </p>
         </Banner>
@@ -86,7 +90,7 @@ export function JsonBodyEditor({ forceUpdateKey, heightMode, request }: Props) {
           items={
             [
               {
-                label: "Automatically Fix JSON",
+                label: t("jsonEditor.autoFix"),
                 keepOpenOnSelect: true,
                 onSelect: handleToggleAutoFix,
                 rightSlot: <IconTooltip content={stripMessage} />,
@@ -97,11 +101,27 @@ export function JsonBodyEditor({ forceUpdateKey, heightMode, request }: Props) {
             ] satisfies DropdownItem[]
           }
         >
-          <IconButton size="sm" variant="border" icon="settings" title="JSON Settings" />
+          <IconButton size="sm" variant="border" icon="settings" title={t("jsonEditor.settings")} />
         </Dropdown>
       </div>,
+      <IconButton
+        key="convert-ai"
+        size="sm"
+        variant="border"
+        icon="arrow_up_down"
+        title={t("ai.convert")}
+        onClick={() =>
+          showDialog({
+            id: "convert-ai-request-body",
+            title: t("ai.title"),
+            size: "lg",
+            noScroll: true,
+            render: ({ hide }) => <AiRequestConversionDialog request={request} hide={hide} />,
+          })
+        }
+      />,
     ],
-    [handleDropdownOpen, handleToggleAutoFix, autoFix, showBanner],
+    [handleDropdownOpen, handleToggleAutoFix, autoFix, request, showBanner, t],
   );
 
   return (

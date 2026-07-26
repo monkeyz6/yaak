@@ -1,8 +1,12 @@
 import { readFile } from "@tauri-apps/plugin-fs";
 import type { HttpResponse } from "@yaakapp-internal/models";
 import type { FilterResponse } from "@yaakapp-internal/plugins";
-import type { ServerSentEvent, SseSummary } from "@yaakapp-internal/sse";
-import { candidateJsonPayloadsFromSseText, computeSseSummary } from "@yaakapp-internal/sse";
+import type { ServerSentEvent, SseSummary, SseTextMode } from "@yaakapp-internal/sse";
+import {
+  candidateJsonPayloadsFromSseText,
+  computeReadableSseText,
+  computeSseSummary,
+} from "@yaakapp-internal/sse";
 import { invokeCmd } from "./tauri";
 
 export async function getResponseBodyText({
@@ -22,6 +26,17 @@ export async function getResponseBodyText({
   }
 
   return result.content;
+}
+
+export async function getResponseBodyReadableSseText(
+  response: HttpResponse,
+  mode: SseTextMode,
+  customJsonPath: string,
+): Promise<SseSummary> {
+  if (!response.bodyPath) return { fragmentCount: 0, summary: "", detectedMode: null };
+  const bytes = await readFile(response.bodyPath);
+  const text = new TextDecoder("utf-8").decode(bytes);
+  return computeReadableSseText(text, mode, customJsonPath);
 }
 
 export async function getResponseBodyEventSource(

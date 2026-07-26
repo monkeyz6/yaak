@@ -1,9 +1,9 @@
 import type { AnyModel } from "@yaakapp-internal/models";
-import { deleteModel, modelTypeLabel } from "@yaakapp-internal/models";
+import { deleteModel } from "@yaakapp-internal/models";
+import { i18n } from "@yaakapp-internal/i18n";
 import { InlineCode } from "@yaakapp-internal/ui";
 import { Prose } from "../components/Prose";
 import { showConfirmDelete } from "./confirm";
-import { pluralizeCount } from "./pluralize";
 import { resolvedModelName } from "./resolvedModelName";
 
 export async function deleteModelWithConfirm(
@@ -18,22 +18,24 @@ export async function deleteModelWithConfirm(
   const firstModel = models[0];
   if (firstModel == null) return false;
 
-  const descriptor =
-    models.length === 1 ? modelTypeLabel(firstModel) : pluralizeCount("Item", models.length);
+  const descriptor = tModelLabel(firstModel);
   const confirmed = await showConfirmDelete({
     id: `delete-model-${models.map((m) => m.id).join(",")}`,
-    title: `Delete ${descriptor}`,
+    title:
+      models.length === 1
+        ? i18n.t("deleteModel.titleOne", { model: descriptor })
+        : i18n.t("deleteModel.titleMany", { count: models.length }),
     requireTyping: options.confirmName,
     description: (
       <>
-        Permanently delete{" "}
         {models.length === 1 ? (
           <>
+            {i18n.t("deleteModel.permanentlyDeleteOne")}{" "}
             <InlineCode>{resolvedModelName(firstModel)}</InlineCode>?
           </>
         ) : models.length < 10 ? (
           <>
-            the following?
+            {i18n.t("deleteModel.permanentlyDeleteFollowing")}
             <Prose className="mt-2">
               <ul className="space-y-1">
                 {models.map((m) => (
@@ -50,7 +52,7 @@ export async function deleteModelWithConfirm(
             </Prose>
           </>
         ) : (
-          `all ${pluralizeCount("item", models.length)}?`
+          i18n.t("deleteModel.permanentlyDeleteAll", { count: models.length })
         )}
       </>
     ),
@@ -62,4 +64,25 @@ export async function deleteModelWithConfirm(
 
   await Promise.allSettled(models.map((m) => deleteModel(m)));
   return true;
+}
+
+function tModelLabel(model: AnyModel) {
+  switch (model.model) {
+    case "workspace":
+      return i18n.t("deleteModel.model.workspace");
+    case "environment":
+      return i18n.t("deleteModel.model.environment");
+    case "folder":
+      return i18n.t("deleteModel.model.folder");
+    case "http_request":
+      return i18n.t("deleteModel.model.httpRequest");
+    case "grpc_request":
+      return i18n.t("deleteModel.model.grpcRequest");
+    case "websocket_request":
+      return i18n.t("deleteModel.model.websocketRequest");
+    case "cookie_jar":
+      return i18n.t("deleteModel.model.cookieJar");
+    default:
+      return i18n.t("deleteModel.model.item");
+  }
 }

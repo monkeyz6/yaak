@@ -1,4 +1,5 @@
 import type { DialogSize } from "@yaakapp-internal/plugins";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { Heading, Overlay } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import * as m from "motion/react-m";
@@ -35,6 +36,7 @@ export function Dialog({
   noScroll,
   vAlign = "center",
 }: DialogProps) {
+  const { t } = useTranslation();
   const titleId = useMemo(() => Math.random().toString(36).slice(2), []);
   const descriptionId = useMemo(
     () => (description ? Math.random().toString(36).slice(2) : undefined),
@@ -115,8 +117,8 @@ export function Dialog({
               <IconButton
                 className="opacity-70 hover:opacity-100"
                 onClick={onClose}
-                title="Close dialog (Esc)"
-                aria-label="Close"
+                title={t("common.closeDialog")}
+                aria-label={t("common.close")}
                 size="sm"
                 icon="x"
               />

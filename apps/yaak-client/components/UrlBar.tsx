@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpRequest } from "@yaakapp-internal/models";
 import type { IconProps } from "@yaakapp-internal/ui";
 import { HStack } from "@yaakapp-internal/ui";
@@ -43,6 +44,7 @@ export const UrlBar = memo(function UrlBar({
   isLoading,
   stateKey,
 }: Props) {
+  const { t } = useTranslation();
   const inputRef = useRef<InputHandle>(null);
   const [isFocused, setIsFocused] = useState<boolean>(false);
 
@@ -72,7 +74,7 @@ export const UrlBar = memo(function UrlBar({
         hideLabel
         language="url"
         className="px-1.5 py-0.5"
-        label="Enter URL"
+        label={t("request.enterUrl")}
         name="url"
         autocomplete={autocomplete}
         forceUpdateKey={forceUpdateKey}
@@ -92,7 +94,7 @@ export const UrlBar = memo(function UrlBar({
                 <IconButton
                   size="xs"
                   iconSize="md"
-                  title="Send Request"
+                  title={t("navigation.sendRequest")}
                   type="submit"
                   className="w-8 mr-0.5 h-full!"
                   iconColor="secondary"

@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { i18n } from "@yaakapp-internal/i18n";
 import type { LicenseCheckStatus } from "@yaakapp-internal/license";
 import { useLicense } from "@yaakapp-internal/license";
 import { settingsAtom } from "@yaakapp-internal/models";
@@ -27,15 +28,15 @@ function getDetail(
     case "active":
       return null;
     case "personal_use":
-      return { label: "Personal Use", color: "notice" };
+      return { label: i18n.t("license.personalUse"), color: "notice" };
     case "trialing":
-      return { label: "Commercial Trial", color: "secondary" };
+      return { label: i18n.t("license.commercialTrial"), color: "secondary" };
     case "error":
-      return { label: "Error", color: "danger" };
+      return { label: i18n.t("license.checkError"), color: "danger" };
     case "inactive":
-      return { label: "Personal Use", color: "notice" };
+      return { label: i18n.t("license.personalUse"), color: "notice" };
     case "past_due":
-      return { label: "Past Due", color: "danger" };
+      return { label: i18n.t("license.pastDue"), color: "danger" };
     case "expired":
       // Don't show the expired message if it's been less than 14 days since the last dismissal
       if (dismissedAt && differenceInCalendarDays(new Date(), dismissedAt) < 14) {
@@ -44,10 +45,10 @@ function getDetail(
 
       return {
         color: "notice",
-        label: data.data.changes > 0 ? "Updates Paused" : "License Expired",
+        label: data.data.changes > 0 ? i18n.t("license.updatesPaused") : i18n.t("license.expired"),
         options: [
           {
-            label: `${data.data.changes} New Updates`,
+            label: i18n.t("license.newUpdates", { count: data.data.changes }),
             color: "success",
             leftSlot: <Icon icon="gift" />,
             rightSlot: <Icon icon="external_link" size="sm" className="opacity-disabled" />,
@@ -56,24 +57,26 @@ function getDetail(
           },
           {
             type: "separator",
-            label: `License expired ${formatDate(data.data.periodEnd, "MMM dd, yyyy")}`,
+            label: i18n.t("license.expiredOn", {
+              date: formatDate(data.data.periodEnd, "MMM dd, yyyy"),
+            }),
           },
           {
-            label: <div className="min-w-48">Renew License</div>,
+            label: <div className="min-w-48">{i18n.t("license.renew")}</div>,
             leftSlot: <Icon icon="refresh" />,
             rightSlot: <Icon icon="external_link" size="sm" className="opacity-disabled" />,
             hidden: data.data.changesUrl == null,
             onSelect: () => openUrl(data.data.billingUrl),
           },
           {
-            label: "Enter License Key",
+            label: i18n.t("license.enterKey"),
             leftSlot: <Icon icon="key_round" />,
             hidden: data.data.changesUrl == null,
             onSelect: openLicenseDialog,
           },
           { type: "separator" },
           {
-            label: <span className="text-text-subtle">Remind me Later</span>,
+            label: <span className="text-text-subtle">{i18n.t("license.remindLater")}</span>,
             leftSlot: <Icon icon="alarm_clock" className="text-text-subtle" />,
             onSelect: () => jotaiStore.set(dismissedAtom, new Date().toISOString()),
           },

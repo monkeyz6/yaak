@@ -20,6 +20,9 @@ import { Button } from "../components/core/Button";
 import { ButtonInfiniteLoading } from "../components/core/ButtonInfiniteLoading";
 
 // Listen for toasts
+import { i18n } from "@yaakapp-internal/i18n";
+import type { ModelPayload } from "@yaakapp-internal/models";
+import { activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
 import { listenToTauriEvent } from "../hooks/useListenToTauriEvent";
 import { updateAvailableAtom } from "./atoms";
 import { stringToColor } from "./color";
@@ -35,6 +38,27 @@ export function initGlobalListeners() {
     showToast({ ...event.payload });
   });
 
+  // Surface failed or risky post-response actions as toasts (details stay in the timeline)
+  listenToTauriEvent<ModelPayload>("model_write", ({ payload }) => {
+    if (payload.change.type !== "upsert") return;
+    const model = payload.model;
+    if (model.model !== "http_response_event") return;
+    if (model.workspaceId !== jotaiStore.get(activeWorkspaceIdAtom)) return;
+    const event = model.event;
+    if (event.type !== "post_response_action") return;
+    if (event.status !== "error" && event.status !== "warning") return;
+    showToast({
+      id: `post-action-${event.status}-${event.variable_name}`,
+      color: event.status === "error" ? "danger" : "notice",
+      message: i18n.t(
+        event.status === "error"
+          ? "postResponse.actionFailedToast"
+          : "postResponse.actionWarningToast",
+        { name: event.variable_name, message: event.message },
+      ),
+    });
+  });
+
   // Show errors for any plugins that failed to load during startup
   void invokeCmd<[string, string][]>("cmd_plugin_init_errors").then((errors) => {
     for (const [dir, err] of errors) {
@@ -43,7 +67,7 @@ export function initGlobalListeners() {
         id: `plugin-init-error-${name}`,
         color: "danger",
         timeout: null,
-        message: `Failed to load plugin "${name}": ${err}`,
+        message: i18n.t("errors.pluginLoadFailed", { name, error: err }),
         action: ({ hide }) => (
           <Button
             size="xs"
@@ -54,7 +78,7 @@ export function initGlobalListeners() {
               openSettings.mutate("plugins:installed");
             }}
           >
-            Manage Plugins
+            {i18n.t("settings.managePlugins")}
           </Button>
         ),
       });
@@ -159,8 +183,8 @@ function showUpdateInstalledToast(version: string) {
     timeout: null,
     message: (
       <VStack>
-        <h2 className="font-semibold">Yaak {version} was installed</h2>
-        <p className="text-text-subtle text-sm">Start using the new version now?</p>
+        <h2 className="font-semibold">{i18n.t("updates.installedTitle", { version })}</h2>
+        <p className="text-text-subtle text-sm">{i18n.t("updates.installedBody")}</p>
       </VStack>
     ),
     action: ({ hide }) => (
@@ -168,13 +192,13 @@ function showUpdateInstalledToast(version: string) {
         size="xs"
         className="mr-auto min-w-20"
         color="primary"
-        loadingChildren="Restarting..."
+        loadingChildren={i18n.t("updates.restarting")}
         onClick={() => {
           hide();
           setTimeout(() => invokeCmd("cmd_restart", {}), 200);
         }}
       >
-        Relaunch Yaak
+        {i18n.t("updates.relaunch")}
       </ButtonInfiniteLoading>
     ),
   });
@@ -195,9 +219,9 @@ async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
     timeout: null,
     message: (
       <VStack>
-        <h2 className="font-semibold">Yaak {version} is available</h2>
+        <h2 className="font-semibold">{i18n.t("updates.availableTitle", { version })}</h2>
         <p className="text-text-subtle text-sm">
-          {downloaded ? "Do you want to install" : "Download and install"} the update?
+          {downloaded ? i18n.t("updates.installPrompt") : i18n.t("updates.downloadInstallPrompt")}
         </p>
       </VStack>
     ),
@@ -207,7 +231,9 @@ async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
           size="xs"
           color="info"
           className="min-w-40"
-          loadingChildren={downloaded ? "Installing..." : "Downloading..."}
+          loadingChildren={
+            downloaded ? i18n.t("updates.installing") : i18n.t("updates.downloading")
+          }
           onClick={async () => {
             await emit<UpdateResponse>(replyEventId, {
               type: "action",
@@ -215,7 +241,7 @@ async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
             });
           }}
         >
-          {downloaded ? "Install Now" : "Download and Install"}
+          {downloaded ? i18n.t("updates.installNow") : i18n.t("updates.downloadAndInstall")}
         </ButtonInfiniteLoading>
         <Button
           size="xs"
@@ -226,7 +252,7 @@ async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
             await openUrl(`https://yaak.app/changelog/${version}`);
           }}
         >
-          What&apos;s New
+          {i18n.t("updates.whatsNew")}
         </Button>
       </HStack>
     ),
@@ -245,12 +271,19 @@ function showPluginUpdatesToast(updateInfo: PluginUpdateNotification) {
     message: (
       <VStack>
         <h2 className="font-semibold">
-          {count === 1 ? "1 plugin update" : `${count} plugin updates`} available
+          {count === 1
+            ? i18n.t("updates.pluginUpdateAvailableOne")
+            : i18n.t("updates.pluginUpdateAvailableMany", { count })}
         </h2>
         <p className="text-text-subtle text-sm">
           {count === 1
             ? pluginNames[0]
-            : `${pluginNames.slice(0, 2).join(", ")}${count > 2 ? `, and ${count - 2} more` : ""}`}
+            : count > 2
+              ? i18n.t("updates.pluginNamesMore", {
+                  names: pluginNames.slice(0, 2).join(", "),
+                  count: count - 2,
+                })
+              : pluginNames.slice(0, 2).join(", ")}
         </p>
       </VStack>
     ),
@@ -260,19 +293,22 @@ function showPluginUpdatesToast(updateInfo: PluginUpdateNotification) {
           size="xs"
           color="info"
           className="min-w-20"
-          loadingChildren="Updating..."
+          loadingChildren={i18n.t("updates.updating")}
           onClick={async () => {
             const updated = await updateAllPlugins();
             hide();
             if (updated.length > 0) {
               showToast({
                 color: "success",
-                message: `Successfully updated ${updated.length} plugin${updated.length === 1 ? "" : "s"}`,
+                message:
+                  updated.length === 1
+                    ? i18n.t("updates.pluginsUpdatedOne")
+                    : i18n.t("updates.pluginsUpdatedMany", { count: updated.length }),
               });
             }
           }}
         >
-          Update All
+          {i18n.t("updates.updateAll")}
         </ButtonInfiniteLoading>
         <Button
           size="xs"
@@ -283,7 +319,7 @@ function showPluginUpdatesToast(updateInfo: PluginUpdateNotification) {
             openSettings.mutate("plugins:installed");
           }}
         >
-          View Updates
+          {i18n.t("updates.viewUpdates")}
         </Button>
       </HStack>
     ),

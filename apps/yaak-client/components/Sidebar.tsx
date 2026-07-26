@@ -2,6 +2,7 @@ import type { Extension } from "@codemirror/state";
 import { Compartment } from "@codemirror/state";
 import { debounce } from "@yaakapp-internal/lib";
 import { gitMutations } from "@yaakapp-internal/git";
+import { i18n, Trans, useTranslation } from "@yaakapp-internal/i18n";
 import type { GitStatus } from "@yaakapp-internal/git";
 import type {
   AnyModel,
@@ -52,10 +53,7 @@ import { deepEqualAtom } from "../lib/atoms";
 import { showConfirm } from "../lib/confirm";
 import { deleteModelWithConfirm } from "../lib/deleteModelWithConfirm";
 import { showDialog } from "../lib/dialog";
-import {
-  gitWorktreeStatusByModelIdAtom,
-  gitWorktreeStatusFamily,
-} from "../lib/gitWorktreeStatus";
+import { gitWorktreeStatusByModelIdAtom, gitWorktreeStatusFamily } from "../lib/gitWorktreeStatus";
 import { jotaiStore } from "../lib/jotai";
 import { resolvedModelName } from "../lib/resolvedModelName";
 import { isSidebarFocused } from "../lib/scopes";
@@ -107,6 +105,7 @@ function isSidebarLeafModel(m: AnyModel): boolean {
 const OPACITY_SUBTLE = "opacity-80";
 
 function Sidebar({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const [hidden, setHidden] = useSidebarHidden();
   const activeWorkspaceId = useAtomValue(activeWorkspaceAtom)?.id;
   const treeId = `tree.${activeWorkspaceId ?? "unknown"}`;
@@ -413,13 +412,13 @@ function Sidebar({ className }: { className?: string }) {
 
       const initialItems: ContextMenuProps["items"] = [
         {
-          label: "Folder Settings",
+          label: t("contextMenu.folderSettings"),
           hidden: !(items.length === 1 && child.model === "folder"),
           leftSlot: <Icon icon="folder_cog" />,
           onSelect: () => openFolderSettings(child.id),
         },
         {
-          label: "Send",
+          label: t("contextMenu.send"),
           hotKeyAction: "request.send",
           hotKeyLabelOnly: true,
           hidden: !onlyHttpRequests,
@@ -430,6 +429,7 @@ function Sidebar({ className }: { className?: string }) {
           ? await getHttpRequestActions()
           : []
         ).map((a) => ({
+          // Plugin-provided labels are runtime data and cannot be translated
           label: a.label,
           leftSlot: <Icon icon={a.icon ?? "empty"} />,
           onSelect: async () => {
@@ -491,7 +491,7 @@ function Sidebar({ className }: { className?: string }) {
         ...gitItems,
         { type: "separator", hidden: gitItems.length === 0 },
         {
-          label: "Rename",
+          label: t("contextMenu.rename"),
           leftSlot: <Icon icon="pencil" />,
           hidden: items.length > 1,
           hotKeyAction: "sidebar.selected.rename",
@@ -499,14 +499,17 @@ function Sidebar({ className }: { className?: string }) {
           onSelect: () => handleRenameSelected(items),
         },
         {
-          label: "Duplicate",
+          label: t("contextMenu.duplicate"),
           hotKeyAction: "model.duplicate",
           hotKeyLabelOnly: true, // Would trigger for every request (bad)
           leftSlot: <Icon icon="copy" />,
           onSelect: () => handleDuplicateSelected(items),
         },
         {
-          label: items.length <= 1 ? "Move" : `Move ${requestItems.length} Requests`,
+          label:
+            items.length <= 1
+              ? t("contextMenu.move")
+              : t("contextMenu.moveRequests", { count: requestItems.length }),
           hotKeyAction: "sidebar.selected.move",
           hotKeyLabelOnly: true,
           leftSlot: <Icon icon="arrow_right_circle" />,
@@ -518,7 +521,7 @@ function Sidebar({ className }: { className?: string }) {
         },
         {
           color: "danger",
-          label: "Delete",
+          label: t("contextMenu.delete"),
           hotKeyAction: "sidebar.selected.delete",
           hotKeyLabelOnly: true,
           leftSlot: <Icon icon="trash" />,
@@ -528,7 +531,7 @@ function Sidebar({ className }: { className?: string }) {
       ];
       return menuItems;
     },
-    [],
+    [t],
   );
 
   const renderContextMenuFn = useCallback<
@@ -575,9 +578,9 @@ function Sidebar({ className }: { className?: string }) {
               hideLabel
               setRef={setFilterRef}
               size="sm"
-              label="filter"
+              label={t("hotkeys.actions.filterSidebar")}
               language={null} // Explicitly disable
-              placeholder="Search"
+              placeholder={t("common.search")}
               onChange={handleFilterChange}
               defaultValue={filterText.text}
               forceUpdateKey={filterText.key}
@@ -590,7 +593,7 @@ function Sidebar({ className }: { className?: string }) {
                   <IconButton
                     className="bg-transparent! h-auto! min-h-full opacity-50 hover:opacity-100 -mr-1"
                     icon="x"
-                    title="Clear filter"
+                    title={t("navigation.clearFilter")}
                     onClick={clearFilterText}
                   />
                 )
@@ -599,7 +602,7 @@ function Sidebar({ className }: { className?: string }) {
             <Dropdown
               items={[
                 {
-                  label: "Focus Active Request",
+                  label: t("navigation.focusActiveRequest"),
                   leftSlot: <Icon icon="crosshair" />,
                   onSelect: () => {
                     const activeId = jotaiStore.get(activeIdAtom);
@@ -623,14 +626,14 @@ function Sidebar({ className }: { className?: string }) {
                   },
                 },
                 {
-                  label: "Expand All Folders",
+                  label: t("hotkeys.actions.expandAllFolders"),
                   leftSlot: <Icon icon="chevrons_up_down" />,
                   onSelect: () => jotaiStore.set(collapsedFamily(treeId), {}),
                   hotKeyAction: "sidebar.expand_all",
                   hotKeyLabelOnly: true,
                 },
                 {
-                  label: "Collapse All Folders",
+                  label: t("hotkeys.actions.collapseAllFolders"),
                   leftSlot: <Icon icon="chevrons_down_up" />,
                   onSelect: () => {
                     if (tree == null) return;
@@ -657,7 +660,7 @@ function Sidebar({ className }: { className?: string }) {
                 size="xs"
                 className="ml-0.5 text-text-subtle hover:text-text"
                 icon="ellipsis_vertical"
-                title="Show sidebar actions menu"
+                title={t("navigation.sidebarActionsMenu")}
               />
             </Dropdown>
           </>
@@ -671,10 +674,10 @@ function Sidebar({ className }: { className?: string }) {
               className="h-auto! py-3 px-3 text-text-subtle! text-sm leading-relaxed text-center"
             >
               <div>
-                No results, but found matches for{" "}
+                {t("navigation.sidebarNoResultsSuggestions")}{" "}
                 {emptyFilterSuggestions?.map((suggestion, i) => (
                   <span key={suggestion.field}>
-                    {i > 0 && " or "}
+                    {i > 0 && ` ${t("navigation.sidebarSuggestionOr")} `}
                     <button
                       type="button"
                       className="max-w-full rounded-sm align-middle focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-info"
@@ -694,10 +697,13 @@ function Sidebar({ className }: { className?: string }) {
               className="h-auto! py-3 px-3 text-text-subtle! text-sm leading-relaxed text-center"
             >
               <div>
-                No results for{" "}
-                <InlineCode className="inline-block max-w-36 truncate align-middle">
-                  {filterText.text}
-                </InlineCode>
+                <Trans
+                  i18nKey="navigation.sidebarNoResults"
+                  values={{ filter: filterText.text }}
+                  components={{
+                    1: <InlineCode className="inline-block max-w-36 truncate align-middle" />,
+                  }}
+                />
               </div>
             </EmptyStateText>
           )}
@@ -748,7 +754,7 @@ function getGitContextMenuItems({
 
   return [
     {
-      label: "View History",
+      label: i18n.t("contextMenu.viewHistory"),
       leftSlot: <Icon icon="history" />,
       hidden: historyPath == null,
       onSelect: () => {
@@ -756,7 +762,7 @@ function getGitContextMenuItems({
         showDialog({
           id: "git-history",
           size: "lg",
-          title: "File History",
+          title: i18n.t("contextMenu.fileHistory"),
           noPadding: true,
           noScroll: true,
           render: () => <FileHistoryDialog dir={syncDir} relaPath={historyPath} />,
@@ -764,18 +770,18 @@ function getGitContextMenuItems({
       },
     },
     {
-      label: "Restore Changes",
+      label: i18n.t("contextMenu.restoreChanges"),
       leftSlot: <Icon icon="rotate_ccw" />,
       hidden: gitStatusEntries.length === 0,
       async onSelect() {
         const confirmed = await showConfirm({
           id: "git-restore-sidebar-items",
-          title: "Restore Changes",
+          title: i18n.t("contextMenu.restoreChanges"),
           description:
             gitStatusEntries.length === 1
-              ? "This will discard uncommitted changes for the selected item."
-              : `This will discard uncommitted changes for ${gitStatusEntries.length} selected items.`,
-          confirmText: "Restore",
+              ? i18n.t("contextMenu.restoreConfirmOne")
+              : i18n.t("contextMenu.restoreConfirmMany", { count: gitStatusEntries.length }),
+          confirmText: i18n.t("contextMenu.restore"),
           color: "danger",
         });
         if (!confirmed) return;
@@ -1028,7 +1034,10 @@ const sidebarGitStatusByModelIdAtom = atom<Record<string, GitStatus>>((get) => {
 
 const sidebarGitStatusFamily = atomFamily(
   (modelId: string) =>
-    selectAtom(sidebarGitStatusByModelIdAtom, (statusByModelId) => statusByModelId[modelId] ?? null),
+    selectAtom(
+      sidebarGitStatusByModelIdAtom,
+      (statusByModelId) => statusByModelId[modelId] ?? null,
+    ),
   Object.is,
 );
 

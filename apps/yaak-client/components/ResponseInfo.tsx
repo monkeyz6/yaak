@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpResponse } from "@yaakapp-internal/models";
 import { IconButton } from "./core/IconButton";
 import { KeyValueRow, KeyValueRows } from "./core/KeyValueRow";
@@ -8,13 +9,14 @@ interface Props {
 }
 
 export function ResponseInfo({ response }: Props) {
+  const { t } = useTranslation();
   return (
     <div className="overflow-auto h-full pb-4">
       <KeyValueRows>
-        <KeyValueRow labelColor="info" label="Version">
+        <KeyValueRow labelColor="info" label={t("response.version")}>
           {response.version ?? <span className="text-text-subtlest">--</span>}
         </KeyValueRow>
-        <KeyValueRow labelColor="info" label="Remote Address">
+        <KeyValueRow labelColor="info" label={t("response.remoteAddress")}>
           {response.remoteAddr ?? <span className="text-text-subtlest">--</span>}
         </KeyValueRow>
         <KeyValueRow
@@ -27,7 +29,7 @@ export function ResponseInfo({ response }: Props) {
                 className="inline-block w-auto ml-1 h-auto! opacity-50 hover:opacity-100"
                 icon="external_link"
                 onClick={() => openUrl(response.url)}
-                title="Open in browser"
+                title={t("response.openInBrowser")}
               />
             </div>
           }

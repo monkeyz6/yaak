@@ -4,12 +4,20 @@ import { useState } from "react";
 import { WINDOW_CONTROLS_WIDTH } from "../lib/constants";
 import { Button } from "./Button";
 
+export interface WindowControlLabels {
+  minimize?: string;
+  maximize?: string;
+  unmaximize?: string;
+  close?: string;
+}
+
 interface Props {
   className?: string;
   onlyX?: boolean;
   osType: string;
   hideWindowControls: boolean;
   useNativeTitlebar: boolean;
+  labels?: WindowControlLabels;
 }
 
 export function WindowControls({
@@ -18,6 +26,7 @@ export function WindowControls({
   osType,
   hideWindowControls,
   useNativeTitlebar,
+  labels,
 }: Props) {
   const [maximized, setMaximized] = useState<boolean>(false);
 
@@ -43,7 +52,7 @@ export function WindowControls({
             onClick={() => getCurrentWebviewWindow().minimize()}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-              <title>Minimize</title>
+              <title>{labels?.minimize ?? "Minimize"}</title>
               <path fill="currentColor" d="M14 8v1H3V8z" />
             </svg>
           </Button>
@@ -64,7 +73,7 @@ export function WindowControls({
           >
             {maximized ? (
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-                <title>Unmaximize</title>
+                <title>{labels?.unmaximize ?? "Unmaximize"}</title>
                 <g fill="currentColor">
                   <path d="M3 5v9h9V5zm8 8H4V6h7z" />
                   <path fillRule="evenodd" d="M5 5h1V4h7v7h-1v1h2V3H5z" clipRule="evenodd" />
@@ -72,7 +81,7 @@ export function WindowControls({
               </svg>
             ) : (
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-                <title>Maximize</title>
+                <title>{labels?.maximize ?? "Maximize"}</title>
                 <path fill="currentColor" d="M3 3v10h10V3zm9 9H4V4h8z" />
               </svg>
             )}
@@ -85,7 +94,7 @@ export function WindowControls({
         onClick={() => getCurrentWebviewWindow().close()}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-          <title>Close</title>
+          <title>{labels?.close ?? "Close"}</title>
           <path
             fill="currentColor"
             fillRule="evenodd"

@@ -1,4 +1,5 @@
 import classNames from "classnames";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { useRef, useState } from "react";
 import type { EditorProps } from "./core/Editor/Editor";
 import { Editor } from "./core/Editor/LazyEditor";
@@ -25,6 +26,7 @@ export function MarkdownEditor({
   forceUpdateKey,
   ...editorProps
 }: Props) {
+  const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<ViewMode>(defaultValue ? "preview" : "edit");
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,7 +46,7 @@ export function MarkdownEditor({
 
   const preview =
     defaultValue.length === 0 ? (
-      <p className="text-text-subtlest">No description</p>
+      <p className="text-text-subtlest">{t("response.noDescription")}</p>
     ) : (
       <div className="pr-1.5 overflow-y-auto max-h-full **:cursor-auto **:select-auto">
         <Markdown className="max-w-lg select-auto cursor-auto">{defaultValue}</Markdown>
@@ -67,14 +69,14 @@ export function MarkdownEditor({
       <div className="absolute top-0 right-0 pt-1.5 pr-1.5">
         <SegmentedControl
           name={name}
-          label="View mode"
+          label={t("response.viewMode")}
           hideLabel
           onChange={setViewMode}
           value={viewMode}
           className="opacity-0 group-focus-within/markdown:opacity-100 group-hover/markdown:opacity-100"
           options={[
-            { icon: "eye", label: "Preview mode", value: "preview" },
-            { icon: "pencil", label: "Edit mode", value: "edit" },
+            { icon: "eye", label: t("response.previewMode"), value: "preview" },
+            { icon: "pencil", label: t("response.editMode"), value: "edit" },
           ]}
         />
       </div>

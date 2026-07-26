@@ -2,13 +2,13 @@ import { useSearch } from "@tanstack/react-router";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type } from "@tauri-apps/plugin-os";
 import { useLicense } from "@yaakapp-internal/license";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { pluginsAtom, settingsAtom } from "@yaakapp-internal/models";
 import { HeaderSize, HStack, Icon } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import { useAtomValue } from "jotai";
 import { useKeyPressEvent } from "react-use";
 import { appInfo } from "../../lib/appInfo";
-import { capitalize } from "../../lib/capitalize";
 import { CountBadge } from "../core/CountBadge";
 import { TabContent, type TabItem, Tabs } from "../core/Tabs/Tabs";
 import { SettingsCertificates } from "./SettingsCertificates";
@@ -45,6 +45,7 @@ const tabs = [
 export type SettingsTab = (typeof tabs)[number];
 
 export default function Settings({ hide }: Props) {
+  const { t } = useTranslation();
   const { tab: tabFromQuery } = useSearch({ from: "/workspaces/$workspaceId/settings" });
   // Parse tab and subtab (e.g., "plugins:installed")
   const [mainTab, subtab] = tabFromQuery?.split(":") ?? [];
@@ -79,13 +80,21 @@ export default function Settings({ hide }: Props) {
           hideWindowControls={settings.hideWindowControls}
           useNativeTitlebar={settings.useNativeTitlebar}
           interfaceScale={settings.interfaceScale}
+          windowControlLabels={{
+            minimize: t("windowControls.minimize"),
+            maximize: t("windowControls.maximize"),
+            unmaximize: t("windowControls.unmaximize"),
+            close: t("windowControls.close"),
+          }}
         >
           <HStack
             space={2}
             justifyContent="center"
             className="w-full h-full grid grid-cols-[1fr_auto] pointer-events-none"
           >
-            <div className={classNames(type() === "macos" ? "text-center" : "pl-2")}>Settings</div>
+            <div className={classNames(type() === "macos" ? "text-center" : "pl-2")}>
+              {t("common.settings")}
+            </div>
           </HStack>
         </HeaderSize>
       )}
@@ -94,11 +103,11 @@ export default function Settings({ hide }: Props) {
         defaultValue={mainTab || tabFromQuery}
         addBorders
         tabListClassName="min-w-40 bg-surface x-theme-sidebar border-r border-border pl-3"
-        label="Settings"
+        label={t("common.settings")}
         tabs={tabs.map(
           (value): TabItem => ({
             value,
-            label: capitalize(value),
+            label: t(`settings.${value}`),
             hidden: !appInfo.featureLicense && value === TAB_LICENSE,
             leftSlot:
               value === TAB_GENERAL ? (

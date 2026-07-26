@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { gitClone } from "@yaakapp-internal/git";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { Banner, VStack } from "@yaakapp-internal/ui";
 import { useState } from "react";
 import { openWorkspaceFromSyncDir } from "../commands/openWorkspaceFromSyncDir";
@@ -22,6 +23,7 @@ function getPathSeparator(path: string): string {
 }
 
 export function CloneGitRepositoryDialog({ hide }: Props) {
+  const { t } = useTranslation();
   const [url, setUrl] = useState<string>("");
   const [baseDirectory, setBaseDirectory] = useState<string>(appInfo.defaultProjectDir);
   const [directoryOverride, setDirectoryOverride] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
 
   const handleSelectDirectory = async () => {
     const dir = await open({
-      title: "Select Directory",
+      title: t("git.selectDirectory"),
       directory: true,
       multiple: false,
     });
@@ -60,9 +62,7 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
       const result = await gitClone(url, directory, promptCredentials);
 
       if (result.type === "needs_credentials") {
-        setError(
-          result.error ?? "Authentication failed. Please check your credentials and try again.",
-        );
+        setError(result.error ?? t("git.cloneAuthFailed"));
         return;
       }
 
@@ -74,7 +74,7 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
       setError(String(err));
       showErrorToast({
         id: "git-clone-error",
-        title: "Clone Failed",
+        title: t("git.cloneFailedTitle"),
         message: String(err),
       });
     } finally {
@@ -90,18 +90,18 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
         </Banner>
       )}
 
-      <CommercialUseBanner source="git-clone" title="Using Git for work?" />
+      <CommercialUseBanner source="git-clone" title={t("git.usingGitForWork")} />
 
       <PlainInput
         required
-        label="Repository URL"
+        label={t("git.repositoryUrl")}
         placeholder="https://github.com/user/repo.git"
         defaultValue={url}
         onChange={setUrl}
       />
 
       <PlainInput
-        label="Directory"
+        label={t("git.directory")}
         placeholder={appInfo.defaultProjectDir}
         defaultValue={directory}
         onChange={setDirectoryOverride}
@@ -110,7 +110,7 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
             size="xs"
             className="mr-0.5 h-auto! my-0.5"
             icon="folder"
-            title="Browse"
+            title={t("git.browse")}
             onClick={handleSelectDirectory}
           />
         }
@@ -119,13 +119,13 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
       <Checkbox
         checked={hasSubdirectory}
         onChange={setHasSubdirectory}
-        title="Workspace is in a subdirectory"
-        help="Enable if the Yaak workspace files are not at the root of the repository"
+        title={t("git.workspaceInSubdirectory")}
+        help={t("git.workspaceInSubdirectoryHelp")}
       />
 
       {hasSubdirectory && (
         <PlainInput
-          label="Subdirectory"
+          label={t("git.subdirectory")}
           placeholder="path/to/workspace"
           defaultValue={subdirectory}
           onChange={setSubdirectory}
@@ -139,7 +139,7 @@ export function CloneGitRepositoryDialog({ hide }: Props) {
         disabled={!url || !directory || isCloning}
         isLoading={isCloning}
       >
-        {isCloning ? "Cloning..." : "Clone Repository"}
+        {isCloning ? t("git.cloning") : t("git.cloneRepository")}
       </Button>
     </VStack>
   );

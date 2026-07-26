@@ -1,3 +1,4 @@
+import { i18n } from "@yaakapp-internal/i18n";
 import { createWorkspaceModel, type Folder, modelTypeLabel } from "@yaakapp-internal/models";
 import { applySync, calculateSync } from "@yaakapp-internal/sync";
 import { Button } from "../components/core/Button";
@@ -16,7 +17,6 @@ import { activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
 import { createFastMutation } from "../hooks/useFastMutation";
 import { showDialog } from "../lib/dialog";
 import { jotaiStore } from "../lib/jotai";
-import { pluralizeCount } from "../lib/pluralize";
 import { showPrompt } from "../lib/prompt";
 import { resolvedModelNameWithFolders } from "../lib/resolvedModelName";
 
@@ -35,11 +35,11 @@ export const createFolder = createFastMutation<
     if (!patch.name) {
       const name = await showPrompt({
         id: "new-folder",
-        label: "Name",
-        defaultValue: "Folder",
-        title: "New Folder",
-        confirmText: "Create",
-        placeholder: "Name",
+        label: i18n.t("common.name"),
+        defaultValue: i18n.t("deleteModel.model.folder"),
+        title: i18n.t("navigation.newFolder"),
+        confirmText: i18n.t("common.create"),
+        placeholder: i18n.t("common.name"),
       });
       if (name == null) return null;
 
@@ -86,7 +86,7 @@ export const syncWorkspace = createFastMutation<
 
     showDialog({
       id: "commit-sync",
-      title: "Changes Detected",
+      title: i18n.t("workspace.syncChangesDetected"),
       size: "md",
       render: ({ hide }) => (
         <form
@@ -99,21 +99,22 @@ export const syncWorkspace = createFastMutation<
         >
           {isDeletingWorkspace ? (
             <Banner color="danger">
-              🚨 <strong>Changes contain a workspace deletion!</strong>
+              🚨 <strong>{i18n.t("workspace.syncContainsDeletion")}</strong>
             </Banner>
           ) : (
             <span />
           )}
           <p>
-            {pluralizeCount("file", dbOps.length)} in the directory{" "}
-            {dbOps.length === 1 ? "has" : "have"} changed. Do you want to update your workspace?
+            {dbOps.length === 1
+              ? i18n.t("workspace.syncFileChangedOne")
+              : i18n.t("workspace.syncFileChangedMany", { count: dbOps.length })}
           </p>
           <Table scrollable className="my-4">
             <TableHead>
               <TableRow>
-                <TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Operation</TableHeaderCell>
+                <TableHeaderCell>{i18n.t("workspace.syncColumnType")}</TableHeaderCell>
+                <TableHeaderCell>{i18n.t("common.name")}</TableHeaderCell>
+                <TableHeaderCell>{i18n.t("workspace.syncColumnOperation")}</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -124,17 +125,17 @@ export const syncWorkspace = createFastMutation<
                 let model: string;
 
                 if (op.type === "dbCreate") {
-                  label = "create";
+                  label = i18n.t("workspace.syncOpCreate");
                   name = resolvedModelNameWithFolders(op.fs.model);
                   color = "text-success";
                   model = modelTypeLabel(op.fs.model);
                 } else if (op.type === "dbUpdate") {
-                  label = "update";
+                  label = i18n.t("workspace.syncOpUpdate");
                   name = resolvedModelNameWithFolders(op.fs.model);
                   color = "text-info";
                   model = modelTypeLabel(op.fs.model);
                 } else if (op.type === "dbDelete") {
-                  label = "delete";
+                  label = i18n.t("workspace.syncOpDelete");
                   name = resolvedModelNameWithFolders(op.model);
                   color = "text-danger";
                   model = modelTypeLabel(op.model);
@@ -157,10 +158,10 @@ export const syncWorkspace = createFastMutation<
           </Table>
           <footer className="py-3 flex flex-row-reverse items-center gap-3">
             <Button type="submit" color="primary">
-              Apply Changes
+              {i18n.t("workspace.syncApplyChanges")}
             </Button>
             <Button onClick={hide} color="secondary">
-              Cancel
+              {i18n.t("common.cancel")}
             </Button>
           </footer>
         </form>

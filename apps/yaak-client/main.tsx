@@ -1,6 +1,7 @@
 import "./main.css";
 import { RouterProvider } from "@tanstack/react-router";
 import { type } from "@tauri-apps/plugin-os";
+import { initializeI18n } from "@yaakapp-internal/i18n";
 import { changeModelStoreWorkspace, initModelStore } from "@yaakapp-internal/models";
 import { setPlatformOnDocument } from "@yaakapp-internal/theme";
 import { StrictMode } from "react";
@@ -13,6 +14,7 @@ import { router } from "./lib/router";
 
 const osType = type();
 setPlatformOnDocument(osType);
+await initializeI18n();
 
 window.addEventListener("keydown", (e) => {
   const rx = /input|select|textarea/i;

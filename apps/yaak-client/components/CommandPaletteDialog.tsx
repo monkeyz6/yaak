@@ -1,4 +1,5 @@
 import { workspacesAtom } from "@yaakapp-internal/models";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { Heading, Icon, useDebouncedState } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import { fuzzyFilter } from "fuzzbunny";
@@ -66,6 +67,7 @@ type CommandPaletteItem = {
 const MAX_PER_GROUP = 8;
 
 export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const [command, setCommand] = useDebouncedState<string>("", 150);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const activeEnvironment = useActiveEnvironment();
@@ -95,44 +97,44 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     const commands: CommandPaletteItem[] = [
       {
         key: "settings.open",
-        label: "Open Settings",
+        label: t("navigation.openSettings"),
         action: "settings.show",
         onSelect: () => openSettings.mutate(null),
       },
       {
         key: "workspace_settings.open",
-        label: "Open Workspace Settings",
+        label: t("navigation.openWorkspaceSettings"),
         action: "workspace_settings.show",
         onSelect: () => openWorkspaceSettings(),
       },
       {
         key: "app.create",
-        label: "Create Workspace",
+        label: t("navigation.createWorkspace"),
         onSelect: createWorkspace,
       },
       {
         key: "model.create",
-        label: "Create HTTP Request",
+        label: t("navigation.createHttpRequest"),
         onSelect: () => createRequestAndNavigate({ model: "http_request", workspaceId }),
       },
       {
         key: "grpc_request.create",
-        label: "Create GRPC Request",
+        label: t("navigation.createGrpcRequest"),
         onSelect: () => createRequestAndNavigate({ model: "grpc_request", workspaceId }),
       },
       {
         key: "websocket_request.create",
-        label: "Create Websocket Request",
+        label: t("navigation.createWebsocketRequest"),
         onSelect: () => createRequestAndNavigate({ model: "websocket_request", workspaceId }),
       },
       {
         key: "folder.create",
-        label: "Create Folder",
+        label: t("navigation.createFolder"),
         onSelect: () => createFolder.mutate({}),
       },
       {
         key: "cookies.show",
-        label: "Show Cookies",
+        label: t("navigation.showCookies"),
         action: "cookies_editor.show",
         onSelect: async () => {
           CookieDialog.show(activeCookieJar?.id ?? null);
@@ -140,18 +142,18 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
       },
       {
         key: "environment.edit",
-        label: "Edit Environment",
+        label: t("navigation.editEnvironment"),
         action: "environment_editor.toggle",
         onSelect: () => editEnvironment(activeEnvironment),
       },
       {
         key: "environment.create",
-        label: "Create Environment",
+        label: t("navigation.createEnvironment"),
         onSelect: () => createSubEnvironmentAndActivate.mutate(baseEnvironment),
       },
       {
         key: "sidebar.toggle",
-        label: "Toggle Sidebar",
+        label: t("navigation.toggleSidebar"),
         action: "sidebar.focus",
         onSelect: () => setSidebarHidden((h) => !h),
       },
@@ -161,14 +163,14 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
       commands.push({
         key: "request.send",
         action: "request.send",
-        label: "Send Request",
+        label: t("navigation.sendRequest"),
         onSelect: () => sendRequest(activeRequest.id),
       });
       if (appInfo.cliVersion != null) {
         commands.push({
           key: "request.copy_cli_send",
           searchText: `copy cli send yaak request send ${activeRequest.id}`,
-          label: "Copy CLI Send Command",
+          label: t("navigation.copyCliCommand"),
           onSelect: () => copyToClipboard(`yaak request send ${activeRequest.id}`),
         });
       }
@@ -194,13 +196,13 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     if (activeRequest != null) {
       commands.push({
         key: "http_request.rename",
-        label: "Rename Request",
+        label: t("navigation.renameRequest"),
         onSelect: () => renameModelWithPrompt(activeRequest),
       });
 
       commands.push({
         key: "sidebar.selected.delete",
-        label: "Delete Request",
+        label: t("navigation.deleteRequest"),
         onSelect: () => deleteModelWithConfirm(activeRequest),
       });
     }
@@ -220,6 +222,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     httpRequestActions,
     sendRequest,
     setSidebarHidden,
+    t,
     workspaceId,
   ]);
 
@@ -285,13 +288,13 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const groups = useMemo<CommandPaletteGroup[]>(() => {
     const actionsGroup: CommandPaletteGroup = {
       key: "actions",
-      label: "Actions",
+      label: t("navigation.actions"),
       items: workspaceCommands,
     };
 
     const requestGroup: CommandPaletteGroup = {
       key: "requests",
-      label: "Switch Request",
+      label: t("navigation.switchRequest"),
       items: [],
     };
 
@@ -322,7 +325,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
 
     const environmentGroup: CommandPaletteGroup = {
       key: "environments",
-      label: "Switch Environment",
+      label: t("navigation.switchEnvironment"),
       items: [],
     };
 
@@ -339,7 +342,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
 
     const workspaceGroup: CommandPaletteGroup = {
       key: "workspaces",
-      label: "Switch Workspace",
+      label: t("navigation.switchWorkspace"),
       items: [],
     };
 
@@ -358,6 +361,7 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     sortedEnvironments,
     activeEnvironment?.id,
     sortedWorkspaces,
+    t,
   ]);
 
   const allItems = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -437,8 +441,8 @@ export function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
             </div>
           }
           name="command"
-          label="Command"
-          placeholder="Search or type a command"
+          label={t("navigation.command")}
+          placeholder={t("navigation.searchCommand")}
           className="font-sans text-base!"
           defaultValue={command}
           onChange={handleSetCommand}

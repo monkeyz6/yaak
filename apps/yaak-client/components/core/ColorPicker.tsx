@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import classNames from "classnames";
 import { useState } from "react";
 import { HexColorPicker } from "react-colorful";
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function ColorPicker({ onChange, color, className }: Props) {
+  const { t } = useTranslation();
   const [updateKey, regenerateKey] = useRandomKey();
   return (
     <div className={className}>
@@ -25,7 +27,7 @@ export function ColorPicker({ onChange, color, className }: Props) {
       />
       <PlainInput
         hideLabel
-        label="Plain Color"
+        label={t("common.plainColor")}
         forceUpdateKey={updateKey}
         defaultValue={color ?? ""}
         onChange={onChange}
@@ -48,6 +50,7 @@ const colors = [
 ] as const;
 
 export function ColorPickerWithThemeColors({ onChange, color, className }: Props) {
+  const { t } = useTranslation();
   const [updateKey, regenerateKey] = useRandomKey();
   const [selectedColor, setSelectedColor] = useState<string | null>(() => {
     if (color == null) return null;
@@ -104,7 +107,7 @@ export function ColorPickerWithThemeColors({ onChange, color, className }: Props
           />
           <PlainInput
             hideLabel
-            label="Plain Color"
+            label={t("common.plainColor")}
             forceUpdateKey={updateKey}
             defaultValue={color ?? ""}
             onChange={onChange}

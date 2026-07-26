@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { AnyModel } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import classNames from "classnames";
@@ -109,6 +110,7 @@ export function SettingValue({
   enableCopy?: boolean;
   value: ReactNode;
 }) {
+  const { t } = useTranslation();
   const textValue = typeof value === "string" || typeof value === "number" ? `${value}` : null;
   const textToCopy = copyText ?? textValue;
 
@@ -133,7 +135,7 @@ export function SettingValue({
         />
       ))}
       {enableCopy && textToCopy != null && (
-        <CopyIconButton size="2xs" text={textToCopy} title="Copy value" />
+        <CopyIconButton size="2xs" text={textToCopy} title={t("common.copyValue")} />
       )}
     </>
   );
@@ -347,10 +349,11 @@ export function SettingRowFile({
 }
 
 export function SettingRowDirectory({
-  noun = "Directory",
+  noun,
   ...props
 }: Omit<Parameters<typeof SettingRowFile>[0], "directory">) {
-  return <SettingRowFile directory noun={noun} {...props} />;
+  const { t } = useTranslation();
+  return <SettingRowFile directory noun={noun ?? t("common.directory")} {...props} />;
 }
 
 export function SettingRowSelect<T extends string>({
@@ -473,7 +476,7 @@ export function SettingOverrideRow({
   disabled,
   onResetOverride,
   overridden,
-  resetTitle = "Reset override",
+  resetTitle,
   title,
 }: {
   children: ReactNode;
@@ -486,6 +489,7 @@ export function SettingOverrideRow({
   resetTitle?: string;
   title: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <SettingRow
       className={className}
@@ -500,7 +504,7 @@ export function SettingOverrideRow({
               icon="undo_2"
               size="2xs"
               iconSize="sm"
-              title={resetTitle}
+              title={resetTitle ?? t("common.resetOverride")}
               className="text-text-subtle"
               onClick={onResetOverride}
             />

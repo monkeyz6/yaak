@@ -1,4 +1,5 @@
 import type { Workspace } from "@yaakapp-internal/models";
+import { Trans, useTranslation } from "@yaakapp-internal/i18n";
 import { patchModel, settingsAtom } from "@yaakapp-internal/models";
 import { HStack, Icon, InlineCode, VStack } from "@yaakapp-internal/ui";
 import { useAtomValue } from "jotai";
@@ -13,13 +14,18 @@ interface Props {
 }
 
 export function SwitchWorkspaceDialog({ hide, workspace }: Props) {
+  const { t } = useTranslation();
   const settings = useAtomValue(settingsAtom);
   const [remember, setRemember] = useState<boolean>(false);
 
   return (
     <VStack space={3}>
       <p>
-        Where would you like to open <InlineCode>{workspace.name}</InlineCode>?
+        <Trans
+          i18nKey="workspace.openPrompt"
+          values={{ name: workspace.name }}
+          components={{ 1: <InlineCode /> }}
+        />
       </p>
       <HStack space={2} justifyContent="start" className="flex-row-reverse">
         <Button
@@ -33,7 +39,7 @@ export function SwitchWorkspaceDialog({ hide, workspace }: Props) {
             }
           }}
         >
-          This Window
+          {t("workspace.thisWindow")}
         </Button>
         <Button
           className="focus"
@@ -47,12 +53,16 @@ export function SwitchWorkspaceDialog({ hide, workspace }: Props) {
             }
           }}
         >
-          New Window
+          {t("workspace.newWindow")}
         </Button>
       </HStack>
       {settings && (
         <HStack justifyContent="end">
-          <Checkbox checked={remember} title="Remember my choice" onChange={setRemember} />
+          <Checkbox
+            checked={remember}
+            title={t("workspace.rememberChoice")}
+            onChange={setRemember}
+          />
         </HStack>
       )}
     </VStack>

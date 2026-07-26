@@ -1,3 +1,4 @@
+import { i18n, useTranslation } from "@yaakapp-internal/i18n";
 import type { Environment, Workspace } from "@yaakapp-internal/models";
 import { duplicateModel, patchModel } from "@yaakapp-internal/models";
 import type { TreeHandle, TreeNode, TreeProps } from "@yaakapp-internal/ui";
@@ -41,6 +42,7 @@ interface Props {
 type TreeModel = Environment | Workspace;
 
 export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
+  const { t } = useTranslation();
   const { allEnvironments, baseEnvironment, baseEnvironments } = useEnvironmentsBreakdown();
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string | null>(
     initialEnvironmentId ?? null,
@@ -68,10 +70,7 @@ export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
         <div className="grid grid-rows-[auto_minmax(0,1fr)]">
           {baseEnvironments.length > 1 ? (
             <div className="p-3">
-              <Banner color="notice">
-                There are multiple base environments for this workspace. Please delete the
-                environments you no longer need.
-              </Banner>
+              <Banner color="notice">{t("environment.multipleBaseWarning")}</Banner>
             </div>
           ) : (
             <span />
@@ -79,7 +78,7 @@ export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
           {selectedEnvironment == null ? (
             <div className="p-3 mt-10">
               <Banner color="danger">
-                Failed to find selected environment <InlineCode>{selectedEnvironmentId}</InlineCode>
+                {t("environment.notFoundSelected")} <InlineCode>{selectedEnvironmentId}</InlineCode>
               </Banner>
             </div>
           ) : (
@@ -96,14 +95,17 @@ export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
   );
 }
 
-const sharableTooltip = (
-  <IconTooltip
-    tabIndex={-1}
-    icon="eye"
-    iconSize="sm"
-    content="This environment will be included in Directory Sync and data exports"
-  />
-);
+function SharableTooltip() {
+  const { t } = useTranslation();
+  return (
+    <IconTooltip
+      tabIndex={-1}
+      icon="eye"
+      iconSize="sm"
+      content={t("environment.sharableIncludedTooltip")}
+    />
+  );
+}
 
 function EnvironmentEditDialogSidebar({
   selectedEnvironmentId,
@@ -112,6 +114,7 @@ function EnvironmentEditDialogSidebar({
   selectedEnvironmentId: string | null;
   setSelectedEnvironmentId: (id: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const activeWorkspaceId = useAtomValue(activeWorkspaceIdAtom) ?? "";
   const treeId = `environment.${activeWorkspaceId}.sidebar`;
   const treeRef = useRef<TreeHandle>(null);
@@ -193,7 +196,7 @@ function EnvironmentEditDialogSidebar({
     (items: TreeModel[]): ContextMenuProps["items"] => {
       const environment = items[0];
       const addEnvironmentItem: DropdownItem = {
-        label: "Create Sub Environment",
+        label: t("environment.createSubEnvironment"),
         leftSlot: <Icon icon="plus" />,
         onSelect: async () => {
           await createSubEnvironment();
@@ -211,7 +214,7 @@ function EnvironmentEditDialogSidebar({
 
       const menuItems: DropdownItem[] = [
         {
-          label: "Rename",
+          label: t("contextMenu.rename"),
           leftSlot: <Icon icon="pencil" />,
           hidden: isBaseEnvironment(environment) || !singleEnvironment,
           hotKeyAction: "sidebar.selected.rename",
@@ -223,7 +226,7 @@ function EnvironmentEditDialogSidebar({
           },
         },
         {
-          label: "Duplicate",
+          label: t("contextMenu.duplicate"),
           leftSlot: <Icon icon="copy" />,
           hidden: isBaseEnvironment(environment),
           hotKeyAction: "sidebar.selected.duplicate",
@@ -231,13 +234,13 @@ function EnvironmentEditDialogSidebar({
           onSelect: () => handleDuplicateSelected(items),
         },
         {
-          label: environment.color ? "Change Color" : "Assign Color",
+          label: environment.color ? t("environment.changeColor") : t("environment.assignColor"),
           leftSlot: <Icon icon="palette" />,
           hidden: isBaseEnvironment(environment) || !singleEnvironment,
           onSelect: async () => showColorPicker(environment),
         },
         {
-          label: `Make ${environment.public ? "Private" : "Sharable"}`,
+          label: environment.public ? t("environment.makePrivate") : t("environment.makeSharable"),
           leftSlot: <Icon icon={environment.public ? "eye_closed" : "eye"} />,
           rightSlot: <EnvironmentSharableTooltip />,
           hidden: items.length > 1,
@@ -247,7 +250,7 @@ function EnvironmentEditDialogSidebar({
         },
         {
           color: "danger",
-          label: "Delete",
+          label: t("contextMenu.delete"),
           hotKeyAction: "sidebar.selected.delete",
           hotKeyLabelOnly: true,
           hidden: !canDeleteEnvironment,
@@ -269,6 +272,7 @@ function EnvironmentEditDialogSidebar({
       handleDeleteEnvironment,
       handleDuplicateSelected,
       handleRenameSelected,
+      t,
     ],
   );
 
@@ -394,6 +398,7 @@ function ItemLeftSlotInner({ item }: { item: TreeModel }) {
 }
 
 function ItemRightSlot({ item }: { item: TreeModel }) {
+  const { t } = useTranslation();
   const { baseEnvironments } = useEnvironmentsBreakdown();
   return (
     <>
@@ -404,7 +409,7 @@ function ItemRightSlot({ item }: { item: TreeModel }) {
           iconSize="sm"
           icon="plus_circle"
           className="opacity-50 hover:opacity-100"
-          title="Add Sub-Environment"
+          title={t("environment.addSubEnvironment")}
           onClick={createSubEnvironment}
         />
       )}
@@ -416,7 +421,9 @@ function ItemInner({ item }: { item: TreeModel }) {
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)] w-full items-center">
       {item.model === "environment" && item.public ? (
-        <div className="mr-2 flex items-center">{sharableTooltip}</div>
+        <div className="mr-2 flex items-center">
+          <SharableTooltip />
+        </div>
       ) : (
         <span aria-hidden />
       )}
@@ -435,7 +442,7 @@ async function createSubEnvironment() {
 function getEditOptions(item: TreeModel) {
   const options: ReturnType<NonNullable<TreeProps<TreeModel>["getEditOptions"]>> = {
     defaultValue: item.name,
-    placeholder: "Name",
+    placeholder: i18n.t("environment.name"),
     async onChange(item, name) {
       await patchModel(item, { name });
     },

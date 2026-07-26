@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { type GrpcRequest, type HttpRequestHeader, patchModel } from "@yaakapp-internal/models";
 import { HStack, Icon, useContainerSize, VStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
@@ -65,8 +66,9 @@ export function GrpcRequestPane({
   onCancel,
   onSend,
 }: Props) {
+  const { t } = useTranslation();
   const authTab = useAuthTab(TAB_AUTH, activeRequest);
-  const metadataTab = useHeadersTab(TAB_METADATA, activeRequest, "Metadata");
+  const metadataTab = useHeadersTab(TAB_METADATA, activeRequest, t("grpc.metadata"));
   const inheritedHeaders = useInheritedHeaders(activeRequest);
   const numSettingsOverrides = countOverriddenSettings(activeRequest);
   const forceUpdateKey = useRequestUpdateKey(activeRequest.id ?? null);
@@ -114,12 +116,12 @@ export function GrpcRequestPane({
     if (activeRequest.service == null || activeRequest.method == null) {
       alert({
         id: "grpc-invalid-service-method",
-        title: "Error",
-        body: "Service or method not selected",
+        title: t("common.error"),
+        body: t("grpc.serviceOrMethodNotSelected"),
       });
     }
     onGo();
-  }, [activeRequest, onGo]);
+  }, [activeRequest, onGo, t]);
 
   const handleSend = useCallback(async () => {
     if (activeRequest == null) return;
@@ -128,21 +130,21 @@ export function GrpcRequestPane({
 
   const tabs: TabItem[] = useMemo(
     () => [
-      { value: TAB_MESSAGE, label: "Message" },
+      { value: TAB_MESSAGE, label: t("grpc.message") },
       ...metadataTab,
       ...authTab,
       {
         value: TAB_SETTINGS,
-        label: "Settings",
+        label: t("request.settings"),
         rightSlot: <CountBadge count={numSettingsOverrides} />,
       },
       {
         value: TAB_DESCRIPTION,
-        label: "Info",
+        label: t("request.info"),
         rightSlot: activeRequest.description && <CountBadge count={true} />,
       },
     ],
-    [activeRequest.description, authTab, metadataTab, numSettingsOverrides],
+    [activeRequest.description, authTab, metadataTab, numSettingsOverrides, t],
   );
 
   const handleMetadataChange = useCallback(
@@ -189,7 +191,7 @@ export function GrpcRequestPane({
             }))}
             itemsAfter={[
               {
-                label: "Refresh",
+                label: t("errors.refresh"),
                 type: "default",
                 leftSlot: <Icon size="sm" icon="refresh" />,
               },
@@ -205,7 +207,7 @@ export function GrpcRequestPane({
                 paneWidth < 400 && "flex-1",
               )}
             >
-              {select.options.find((o) => o.value === select.value)?.label ?? "No Schema"}
+              {select.options.find((o) => o.value === select.value)?.label ?? t("grpc.noSchema")}
             </Button>
           </RadioDropdown>
           {methodType === "client_streaming" || methodType === "streaming" ? (
@@ -215,14 +217,14 @@ export function GrpcRequestPane({
                   <IconButton
                     variant="border"
                     size="sm"
-                    title="Cancel"
+                    title={t("common.cancel")}
                     onClick={onCancel}
                     icon="x"
                   />
                   <IconButton
                     variant="border"
                     size="sm"
-                    title="Commit"
+                    title={t("grpc.commit")}
                     onClick={onCommit}
                     icon="check"
                   />
@@ -231,7 +233,7 @@ export function GrpcRequestPane({
               <IconButton
                 size="sm"
                 variant="border"
-                title={isStreaming ? "Connect" : "Send"}
+                title={isStreaming ? t("grpc.connect") : t("contextMenu.send")}
                 hotkeyAction="request.send"
                 onClick={isStreaming ? handleSend : handleConnect}
                 icon={isStreaming ? "send_horizontal" : "arrow_up_down"}
@@ -241,7 +243,7 @@ export function GrpcRequestPane({
             <IconButton
               size="sm"
               variant="border"
-              title={methodType === "unary" ? "Send" : "Connect"}
+              title={methodType === "unary" ? t("contextMenu.send") : t("grpc.connect")}
               hotkeyAction="request.send"
               onClick={isStreaming ? onCancel : handleConnect}
               disabled={methodType === "no-schema" || methodType === "no-method"}
@@ -257,7 +259,7 @@ export function GrpcRequestPane({
         </HStack>
       </div>
       <Tabs
-        label="Request"
+        label={t("request.request")}
         tabs={tabs}
         tabListClassName="mt-1 mb-1.5!"
         storageKey="grpc_request_tabs"
@@ -292,7 +294,7 @@ export function GrpcRequestPane({
         <TabContent value={TAB_DESCRIPTION}>
           <div className="grid grid-rows-[auto_minmax(0,1fr)] h-full">
             <PlainInput
-              label="Request Name"
+              label={t("request.requestName")}
               hideLabel
               forceUpdateKey={forceUpdateKey}
               defaultValue={activeRequest.name}
@@ -303,7 +305,7 @@ export function GrpcRequestPane({
             />
             <MarkdownEditor
               name="request-description"
-              placeholder="Request description"
+              placeholder={t("request.requestDescription")}
               defaultValue={activeRequest.description}
               stateKey={`description.${activeRequest.id}`}
               onChange={handleDescriptionChange}

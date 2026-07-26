@@ -1,13 +1,8 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpResponse } from "@yaakapp-internal/models";
 import { deleteModel } from "@yaakapp-internal/models";
 import { HStack, Icon } from "@yaakapp-internal/ui";
-import {
-  differenceInHours,
-  differenceInMinutes,
-  format,
-  isToday,
-  isYesterday,
-} from "date-fns";
+import { differenceInHours, differenceInMinutes, format, isToday, isYesterday } from "date-fns";
 import { useDeleteHttpResponses } from "../hooks/useDeleteHttpResponses";
 import { useKeyValue } from "../hooks/useKeyValue";
 import { DismissibleBanner } from "./core/DismissibleBanner";
@@ -29,6 +24,7 @@ export const RecentHttpResponsesDropdown = function ResponsePane({
   responses,
   onPinnedResponseId,
 }: Props) {
+  const { t } = useTranslation();
   const deleteAllResponses = useDeleteHttpResponses(activeResponse?.requestId);
   const movedActionsBannerId = "response-actions-moved-to-response-menu-2026-07-02-v2";
   const { value: dismissedMovedActions } = useKeyValue<boolean>({
@@ -48,28 +44,34 @@ export const RecentHttpResponsesDropdown = function ResponsePane({
     const createdAtDate = new Date(createdAt);
     const minutesAgo = differenceInMinutes(now, createdAtDate);
     const hoursAgo = differenceInHours(now, createdAtDate);
+    const isJustNow = minutesAgo < 5;
     let historyGroup = format(createdAtDate, "MMM d, yyyy");
-    if (minutesAgo < 5) historyGroup = "Just now";
-    else if (minutesAgo < 15) historyGroup = "5 minutes ago";
-    else if (minutesAgo < 60) historyGroup = "15 minutes ago";
-    else if (hoursAgo < 3) historyGroup = "1 hour ago";
-    else if (hoursAgo < 6) historyGroup = "3 hours ago";
-    else if (isToday(createdAtDate)) historyGroup = "Today";
-    else if (isYesterday(createdAtDate)) historyGroup = "Yesterday";
-    else if (createdAtDate.getFullYear() === now.getFullYear()) historyGroup = format(createdAtDate, "MMM d");
+    if (isJustNow) historyGroup = t("common.justNow");
+    else if (minutesAgo < 15) historyGroup = t("common.fiveMinutesAgo");
+    else if (minutesAgo < 60) historyGroup = t("common.fifteenMinutesAgo");
+    else if (hoursAgo < 3) historyGroup = t("common.oneHourAgo");
+    else if (hoursAgo < 6) historyGroup = t("common.threeHoursAgo");
+    else if (isToday(createdAtDate)) historyGroup = t("common.today");
+    else if (isYesterday(createdAtDate)) historyGroup = t("common.yesterday");
+    else if (createdAtDate.getFullYear() === now.getFullYear())
+      historyGroup = format(createdAtDate, "MMM d");
     const absoluteTime = format(createdAt, "MMM d, yyyy, h:mm:ss a O");
 
-    if (historyGroup === "Just now") {
+    if (isJustNow) {
       hasRecentResponses = true;
     } else if (!hasRecentResponses && !hasShownRecentEmptyState) {
       responseHistoryItems.push({
         type: "content",
-        label: <span className="block px-4 py-1 text-sm text-text-subtle">No recent requests</span>,
+        label: (
+          <span className="block px-4 py-1 text-sm text-text-subtle">
+            {t("common.noRecentRequests")}
+          </span>
+        ),
       });
       hasShownRecentEmptyState = true;
     }
 
-    if (historyGroup !== "Just now" && historyGroup !== lastHistoryGroup) {
+    if (!isJustNow && historyGroup !== lastHistoryGroup) {
       responseHistoryItems.push({
         type: "separator",
         label: <span title={absoluteTime}>{historyGroup}</span>,
@@ -101,7 +103,11 @@ export const RecentHttpResponsesDropdown = function ResponsePane({
   if (!hasRecentResponses && !hasShownRecentEmptyState) {
     responseHistoryItems.push({
       type: "content",
-      label: <span className="block px-4 py-1 text-sm text-text-subtle">No recent requests</span>,
+      label: (
+        <span className="block px-4 py-1 text-sm text-text-subtle">
+          {t("common.noRecentRequests")}
+        </span>
+      ),
     });
   }
 
@@ -109,18 +115,18 @@ export const RecentHttpResponsesDropdown = function ResponsePane({
     <Dropdown
       items={[
         {
-          label: "Delete",
+          label: t("common.delete"),
           leftSlot: <Icon icon="trash" />,
           onSelect: () => deleteModel(activeResponse),
         },
         {
-          label: "Delete all",
+          label: t("response.deleteAll"),
           leftSlot: <Icon icon="trash" />,
           onSelect: deleteAllResponses.mutate,
           disabled: responses.length === 0,
         },
         {
-          label: "Unpin Response",
+          label: t("response.unpinResponse"),
           onSelect: () => onPinnedResponseId(activeResponse.id),
           leftSlot: <Icon icon="unpin" />,
           hidden: latestResponseId === activeResponse.id,
@@ -136,19 +142,19 @@ export const RecentHttpResponsesDropdown = function ResponsePane({
               size="xs"
               className="max-w-72"
             >
-              <p>Copy and save actions moved to the Response tab menu.</p>
+              <p>{t("response.actionsMovedToResponseMenu")}</p>
             </DismissibleBanner>
           ),
         },
         {
           type: "separator",
-          label: "Recent",
+          label: t("common.recent"),
         },
         ...responseHistoryItems,
       ]}
     >
       <IconButton
-        title="Show response history"
+        title={t("response.showResponseHistory")}
         icon={activeResponse?.id === latestResponseId ? "history" : "pin"}
         className="m-0.5 text-text-subtle"
         size="sm"

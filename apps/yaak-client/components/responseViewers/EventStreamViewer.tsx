@@ -1,5 +1,10 @@
 import type { HttpResponse } from "@yaakapp-internal/models";
-import { extractSseValueAtPath, type ServerSentEvent } from "@yaakapp-internal/sse";
+import { useTranslation } from "@yaakapp-internal/i18n";
+import {
+  extractSseValueAtPath,
+  type ServerSentEvent,
+  type SseTextMode,
+} from "@yaakapp-internal/sse";
 import { HStack, Icon, InlineCode, SplitLayout, VStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import type { CSSProperties, ReactNode } from "react";
@@ -7,7 +12,7 @@ import { Fragment, useMemo, useState } from "react";
 import { useKeyValue } from "../../hooks/useKeyValue";
 import { useFormatText } from "../../hooks/useFormatText";
 import { useResponseBodyEventSource } from "../../hooks/useResponseBodyEventSource";
-import { useResponseBodySseSummary } from "../../hooks/useResponseBodySseSummary";
+import { useResponseBodyReadableSseText } from "../../hooks/useResponseBodyReadableSseText";
 import {
   sseSummaryResultKeyPathAutocomplete,
   useSseSummaryResultKeyPath,
@@ -44,6 +49,7 @@ export function EventStreamViewer({ response }: Props) {
 }
 
 function ActualEventStreamViewer({ response }: Props) {
+  const { t } = useTranslation();
   const [showLarge, setShowLarge] = useState<boolean>(false);
   const [showingLarge, setShowingLarge] = useState<boolean>(false);
   const filterEventPreviewsSetting = useKeyValue<boolean>({
@@ -62,9 +68,26 @@ function ActualEventStreamViewer({ response }: Props) {
     fallback: false,
   });
   const summarySettings = useSseSummaryResultKeyPath({ response });
+  const modeSetting = useKeyValue<SseTextMode | "off" | null>({
+    namespace: "no_sync",
+    key: ["sse_readable_text_mode", response.requestId],
+    fallback: null,
+  });
+  // Users who had explicitly enabled the legacy JSONPath extraction keep that behavior
+  const mode =
+    modeSetting.value ?? (summarySettings.explicitlyEnabled ? "custom_jsonpath" : "auto");
+  const showReasoningSetting = useKeyValue<boolean>({
+    namespace: "no_sync",
+    key: ["sse_show_reasoning", response.requestId],
+    fallback: false,
+  });
+  const customJsonPath = summarySettings.resultKeyPathInputValue.trim();
   const events = useResponseBodyEventSource(response);
-  const summary = useResponseBodySseSummary(response, summarySettings.resultKeyPath);
-  const showExtractedText = summarySettings.resultKeyPath != null;
+  const summary = useResponseBodyReadableSseText(response, mode, customJsonPath);
+  // In auto mode the panel only appears once an AI stream format is actually detected
+  const showExtractedText =
+    mode === "off" ? false : mode === "auto" ? summary.data?.detectedMode != null : true;
+  const activeJsonPath = mode === "custom_jsonpath" ? customJsonPath : null;
   const showResultKeyPathWarning =
     showExtractedText &&
     summary.data != null &&
@@ -78,7 +101,7 @@ function ActualEventStreamViewer({ response }: Props) {
   const settingsItems = useMemo<DropdownItem[]>(
     () => [
       {
-        label: "Apply to Previews",
+        label: t("sse.applyPreviews"),
         keepOpenOnSelect: true,
         onSelect: () => filterEventPreviewsSetting.set(filterEventPreviewsSetting.value !== true),
         leftSlot: (
@@ -92,7 +115,7 @@ function ActualEventStreamViewer({ response }: Props) {
         ),
       },
       {
-        label: "Apply to Details",
+        label: t("sse.applyDetails"),
         keepOpenOnSelect: true,
         onSelect: () => applyToDetailsSetting.set(applyToDetailsSetting.value !== true),
         leftSlot: (
@@ -106,34 +129,37 @@ function ActualEventStreamViewer({ response }: Props) {
         ),
       },
     ],
-    [
-      applyToDetailsSetting,
-      filterEventPreviewsSetting,
-    ],
+    [applyToDetailsSetting, filterEventPreviewsSetting, t],
   );
 
   return (
     <div className="h-full min-h-0 grid grid-rows-[auto_minmax(0,1fr)]">
       <HStack space={2} alignItems="center" className="pt-1 pb-1 border-b border-border-subtle">
-        <div className={classNames(summarySettings.enabled ? "w-44 shrink-0" : "min-w-40 flex-1")}>
+        <div
+          className={classNames(mode === "custom_jsonpath" ? "w-52 shrink-0" : "min-w-52 flex-1")}
+        >
           <Select
-            name={`sse-summary-result-key-path-enabled::${response.requestId}`}
-            label="Extracted text"
+            name={`sse-readable-text-mode::${response.requestId}`}
+            label={t("sse.extractedText")}
             hideLabel
             size="xs"
-            value={summarySettings.enabled ? "jsonpath" : "off"}
+            value={mode}
             options={[
-              { label: "Full events", value: "off" },
-              { label: "JSONPath", value: "jsonpath" },
+              { label: t("sse.fullEvents"), value: "off" },
+              { label: t("sse.auto"), value: "auto" },
+              { label: "OpenAI Chat Completions", value: "openai_chat" },
+              { label: "OpenAI Responses", value: "openai_responses" },
+              { label: "Anthropic Messages", value: "anthropic" },
+              { label: t("sse.customJsonPath"), value: "custom_jsonpath" },
             ]}
-            onChange={(value) => summarySettings.setEnabled(value === "jsonpath")}
+            onChange={(value) => modeSetting.set(value)}
           />
         </div>
-        {summarySettings.enabled && (
+        {mode === "custom_jsonpath" && (
           <>
             <div className="min-w-40 flex-1">
               <Input
-                label="Result JSON path"
+                label={t("sse.resultPath")}
                 hideLabel
                 size="xs"
                 autocomplete={sseSummaryResultKeyPathAutocomplete}
@@ -147,7 +173,7 @@ function ActualEventStreamViewer({ response }: Props) {
                         tabIndex={-1}
                         icon="alert_triangle"
                         iconColor="notice"
-                        content="No text fragments matched this JSONPath."
+                        content={t("sse.noMatch")}
                       />
                     </div>
                   ) : null
@@ -158,12 +184,7 @@ function ActualEventStreamViewer({ response }: Props) {
               />
             </div>
             <Dropdown items={settingsItems}>
-              <IconButton
-                size="xs"
-                variant="border"
-                icon="settings"
-                title="Extracted text settings"
-              />
+              <IconButton size="xs" variant="border" icon="settings" title={t("sse.settings")} />
             </Dropdown>
           </>
         )}
@@ -186,12 +207,14 @@ function ActualEventStreamViewer({ response }: Props) {
                 <EventViewerRow
                   isActive={isActive}
                   onClick={onClick}
-                  icon={<Icon color="info" title="Server Message" icon="arrow_big_down_dash" />}
+                  icon={
+                    <Icon color="info" title={t("sse.serverMessage")} icon="arrow_big_down_dash" />
+                  }
                   content={
                     <HStack space={2} className="items-center">
                       <EventLabels event={event} index={index} isActive={isActive} />
                       <span className="truncate text-xs">
-                        {getEventPreview(event, summarySettings.resultKeyPath, filterEventPreviews)}
+                        {getEventPreview(event, activeJsonPath, filterEventPreviews)}
                       </span>
                     </HStack>
                   }
@@ -202,7 +225,7 @@ function ActualEventStreamViewer({ response }: Props) {
                   event={event}
                   index={index}
                   applyJsonPath={applyToDetails}
-                  resultKeyPath={summarySettings.resultKeyPath}
+                  resultKeyPath={activeJsonPath}
                   showLarge={showLarge}
                   showingLarge={showingLarge}
                   setShowLarge={setShowLarge}
@@ -222,9 +245,14 @@ function ActualEventStreamViewer({ response }: Props) {
                   isLoading={summary.isLoading && summary.data == null}
                   onRenderMarkdownChange={renderMarkdownSetting.set}
                   renderMarkdown={renderMarkdown}
-                  resultKeyPath={summarySettings.resultKeyPath ?? ""}
+                  mode={mode === "off" ? "auto" : mode}
+                  detectedMode={summary.data?.detectedMode ?? null}
+                  customJsonPath={customJsonPath}
                   summary={summary.data?.summary ?? ""}
                   fragmentCount={summary.data?.fragmentCount ?? 0}
+                  reasoning={summary.data?.reasoning ?? ""}
+                  showReasoning={showReasoningSetting.value === true}
+                  onShowReasoningChange={showReasoningSetting.set}
                 />
               )
             : null
@@ -235,41 +263,77 @@ function ActualEventStreamViewer({ response }: Props) {
 }
 
 function SseSummaryFooter({
+  customJsonPath,
+  detectedMode,
   error,
   fragmentCount,
   isLoading,
+  mode,
   onRenderMarkdownChange,
+  onShowReasoningChange,
+  reasoning,
   renderMarkdown,
-  resultKeyPath,
+  showReasoning,
   style,
   summary,
 }: {
+  customJsonPath: string;
+  detectedMode: SseTextMode | null;
   error: string | null;
   fragmentCount: number;
   isLoading: boolean;
+  mode: SseTextMode;
   onRenderMarkdownChange: (renderMarkdown: boolean) => void;
+  onShowReasoningChange: (showReasoning: boolean) => void;
+  reasoning: string;
   renderMarkdown: boolean;
-  resultKeyPath: string;
+  showReasoning: boolean;
   style: CSSProperties;
   summary: string;
 }) {
+  const { t } = useTranslation();
   const hasSummary = fragmentCount > 0;
+  const hasReasoning = reasoning.length > 0;
+  const detectedFormat = mode === "auto" ? readableModeLabel(detectedMode) : null;
+  const fixedFormat = mode === "auto" ? null : readableModeLabel(mode);
   const actions = useMemo(
     () => [
+      ...(hasReasoning
+        ? [
+            {
+              key: "sse-summary-reasoning",
+              label: t("sse.reasoning"),
+              type: "select" as const,
+              value: showReasoning ? "visible" : "hidden",
+              options: [
+                { label: t("sse.reasoningHidden"), value: "hidden" },
+                { label: t("sse.reasoningVisible"), value: "visible" },
+              ],
+              onChange: (value: string) => onShowReasoningChange(value === "visible"),
+            },
+          ]
+        : []),
       {
         key: "sse-summary-format",
-        label: "Extracted text format",
+        label: t("sse.format"),
         type: "select" as const,
         value: renderMarkdown ? "markdown" : "text",
         options: [
-          { label: "Text", value: "text" },
-          { label: "Markdown", value: "markdown" },
+          { label: t("sse.text"), value: "text" },
+          { label: t("sse.markdown"), value: "markdown" },
         ],
         onChange: (value: string) => onRenderMarkdownChange(value === "markdown"),
       },
     ],
-    [onRenderMarkdownChange, renderMarkdown],
+    [hasReasoning, onRenderMarkdownChange, onShowReasoningChange, renderMarkdown, showReasoning, t],
   );
+
+  const title =
+    detectedFormat != null
+      ? `${t("sse.extractedText")} · ${t("sse.detectedFormat", { format: detectedFormat })}`
+      : fixedFormat != null
+        ? `${t("sse.extractedText")} · ${fixedFormat}`
+        : t("sse.extractedText");
 
   return (
     <div
@@ -279,7 +343,7 @@ function SseSummaryFooter({
       <div className="pt-2">
         <EventDetailHeader
           actions={actions}
-          title="Extracted Text"
+          title={title}
           copyText={hasSummary ? summary : undefined}
         />
       </div>
@@ -292,25 +356,45 @@ function SseSummaryFooter({
         {error != null ? (
           <span className="text-danger">{error}</span>
         ) : isLoading ? (
-          <span className="italic text-text-subtlest">Loading extracted text...</span>
-        ) : hasSummary ? (
-          renderMarkdown ? (
-            <div className="min-h-0">
-              <Markdown className="select-auto cursor-auto">{summary}</Markdown>
-            </div>
-          ) : (
-            <pre className="font-mono whitespace-pre-wrap wrap-break-word select-auto cursor-auto">
-              {summary}
-            </pre>
-          )
+          <span className="italic text-text-subtlest">{t("sse.loading")}</span>
+        ) : hasSummary || (hasReasoning && showReasoning) ? (
+          <VStack space={2}>
+            {showReasoning && hasReasoning && (
+              <pre className="font-mono text-xs whitespace-pre-wrap wrap-break-word select-auto cursor-auto text-text-subtle italic border-l-2 border-border-subtle pl-2">
+                {reasoning}
+              </pre>
+            )}
+            {hasSummary &&
+              (renderMarkdown ? (
+                <div className="min-h-0">
+                  <Markdown className="select-auto cursor-auto">{summary}</Markdown>
+                </div>
+              ) : (
+                <pre className="font-mono whitespace-pre-wrap wrap-break-word select-auto cursor-auto">
+                  {summary}
+                </pre>
+              ))}
+          </VStack>
         ) : (
           <EmptyStateText className="gap-1.5">
-            No fragments for <InlineCode className="py-0">{resultKeyPath}</InlineCode>
+            {t("sse.noFragmentsFor", {
+              format:
+                mode === "custom_jsonpath"
+                  ? customJsonPath || t("sse.customJsonPath")
+                  : (fixedFormat ?? detectedFormat ?? t("sse.auto")),
+            })}
           </EmptyStateText>
         )}
       </div>
     </div>
   );
+}
+
+function readableModeLabel(mode: SseTextMode | null): string | null {
+  if (mode === "openai_chat") return "OpenAI Chat Completions";
+  if (mode === "openai_responses") return "OpenAI Responses";
+  if (mode === "anthropic") return "Anthropic Messages";
+  return null;
 }
 
 function getEventPreview(
@@ -346,6 +430,7 @@ function EventDetail({
   setShowingLarge: (v: boolean) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const detailText = useMemo(
     () =>
       applyJsonPath && resultKeyPath != null
@@ -361,13 +446,13 @@ function EventDetail({
   return (
     <div className="flex flex-col h-full">
       <EventDetailHeader
-        title="Message Received"
+        title={t("sse.messageReceived")}
         prefix={<EventLabels event={event} index={index} />}
         onClose={onClose}
       />
       {!showLarge && detailText.length > 1000 * 1000 ? (
         <VStack space={2} className="italic text-text-subtlest">
-          Message previews larger than 1MB are hidden
+          {t("sse.largeMessageHidden")}
           <div>
             <Button
               onClick={() => {
@@ -382,7 +467,7 @@ function EventDetail({
               variant="border"
               size="xs"
             >
-              Try Showing
+              {t("sse.tryShowing")}
             </Button>
           </div>
         </VStack>

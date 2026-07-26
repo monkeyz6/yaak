@@ -94,6 +94,7 @@ export type HttpRequest = {
    * URL parameters used for both path placeholders (`:id`) and query string entries.
    */
   urlParameters: Array<HttpUrlParameter>;
+  postResponseActions: Array<PostResponseAction>;
   settingSendCookies: InheritedBoolSetting;
   settingStoreCookies: InheritedBoolSetting;
   settingValidateCertificates: InheritedBoolSetting;
@@ -117,6 +118,18 @@ export type HttpUrlParameter = {
 export type InheritedBoolSetting = { enabled?: boolean; value: boolean };
 
 export type InheritedIntSetting = { enabled?: boolean; value: number };
+
+export type PostResponseAction = {
+  id?: string;
+  enabled?: boolean;
+  type: "set_environment_variable";
+  jsonPath: string;
+  variableName: string;
+  /**
+   * Wrap the extracted value in the secure() template function before storing it
+   */
+  secure?: boolean;
+};
 
 export type SyncModel =
   | ({ type: "workspace" } & Workspace)

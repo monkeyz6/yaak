@@ -1,15 +1,9 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { WebsocketConnection } from "@yaakapp-internal/models";
 import { deleteModel, getModel } from "@yaakapp-internal/models";
 import { HStack, Icon } from "@yaakapp-internal/ui";
-import {
-  differenceInHours,
-  differenceInMinutes,
-  format,
-  isToday,
-  isYesterday,
-} from "date-fns";
+import { differenceInHours, differenceInMinutes, format, isToday, isYesterday } from "date-fns";
 import { deleteWebsocketConnections } from "../commands/deleteWebsocketConnections";
-import { pluralizeCount } from "../lib/pluralize";
 import { Dropdown, type DropdownItem } from "./core/Dropdown";
 import { formatMillis } from "./core/HttpResponseDurationTag";
 import { IconButton } from "./core/IconButton";
@@ -25,6 +19,7 @@ export function RecentWebsocketConnectionsDropdown({
   connections,
   onPinnedConnectionId,
 }: Props) {
+  const { t } = useTranslation();
   const latestConnectionId = connections[0]?.id ?? "n/a";
   const connectionHistoryItems: DropdownItem[] = [];
   let lastHistoryGroup: string | null = null;
@@ -37,28 +32,34 @@ export function RecentWebsocketConnectionsDropdown({
     const createdAtDate = new Date(createdAt);
     const minutesAgo = differenceInMinutes(now, createdAtDate);
     const hoursAgo = differenceInHours(now, createdAtDate);
+    const isJustNow = minutesAgo < 5;
     let historyGroup = format(createdAtDate, "MMM d, yyyy");
-    if (minutesAgo < 5) historyGroup = "Just now";
-    else if (minutesAgo < 15) historyGroup = "5 minutes ago";
-    else if (minutesAgo < 60) historyGroup = "15 minutes ago";
-    else if (hoursAgo < 3) historyGroup = "1 hour ago";
-    else if (hoursAgo < 6) historyGroup = "3 hours ago";
-    else if (isToday(createdAtDate)) historyGroup = "Today";
-    else if (isYesterday(createdAtDate)) historyGroup = "Yesterday";
-    else if (createdAtDate.getFullYear() === now.getFullYear()) historyGroup = format(createdAtDate, "MMM d");
+    if (isJustNow) historyGroup = t("common.justNow");
+    else if (minutesAgo < 15) historyGroup = t("common.fiveMinutesAgo");
+    else if (minutesAgo < 60) historyGroup = t("common.fifteenMinutesAgo");
+    else if (hoursAgo < 3) historyGroup = t("common.oneHourAgo");
+    else if (hoursAgo < 6) historyGroup = t("common.threeHoursAgo");
+    else if (isToday(createdAtDate)) historyGroup = t("common.today");
+    else if (isYesterday(createdAtDate)) historyGroup = t("common.yesterday");
+    else if (createdAtDate.getFullYear() === now.getFullYear())
+      historyGroup = format(createdAtDate, "MMM d");
     const absoluteTime = format(createdAt, "MMM d, yyyy, h:mm:ss a O");
 
-    if (historyGroup === "Just now") {
+    if (isJustNow) {
       hasRecentConnections = true;
     } else if (!hasRecentConnections && !hasShownRecentEmptyState) {
       connectionHistoryItems.push({
         type: "content",
-        label: <span className="block px-4 py-1 text-sm text-text-subtle">No recent connections</span>,
+        label: (
+          <span className="block px-4 py-1 text-sm text-text-subtle">
+            {t("common.noRecentConnections")}
+          </span>
+        ),
       });
       hasShownRecentEmptyState = true;
     }
 
-    if (historyGroup !== "Just now" && historyGroup !== lastHistoryGroup) {
+    if (!isJustNow && historyGroup !== lastHistoryGroup) {
       connectionHistoryItems.push({
         type: "separator",
         label: <span title={absoluteTime}>{historyGroup}</span>,
@@ -80,7 +81,11 @@ export function RecentWebsocketConnectionsDropdown({
   if (!hasRecentConnections && !hasShownRecentEmptyState) {
     connectionHistoryItems.push({
       type: "content",
-      label: <span className="block px-4 py-1 text-sm text-text-subtle">No recent connections</span>,
+      label: (
+        <span className="block px-4 py-1 text-sm text-text-subtle">
+          {t("common.noRecentConnections")}
+        </span>
+      ),
     });
   }
 
@@ -88,12 +93,12 @@ export function RecentWebsocketConnectionsDropdown({
     <Dropdown
       items={[
         {
-          label: "Clear Connection",
+          label: t("common.clearConnection"),
           onSelect: () => deleteModel(activeConnection),
           disabled: connections.length === 0,
         },
         {
-          label: `Clear ${pluralizeCount("Connection", connections.length)}`,
+          label: t("common.clearConnections", { count: connections.length }),
           onSelect: () => {
             const request = getModel("websocket_request", activeConnection.requestId);
             if (request != null) {
@@ -103,12 +108,12 @@ export function RecentWebsocketConnectionsDropdown({
           hidden: connections.length <= 1,
           disabled: connections.length === 0,
         },
-        { type: "separator", label: "History" },
+        { type: "separator", label: t("common.history") },
         ...connectionHistoryItems,
       ]}
     >
       <IconButton
-        title="Show connection history"
+        title={t("common.showConnectionHistory")}
         icon={activeConnection?.id === latestConnectionId ? "history" : "pin"}
         className="m-0.5 text-text-subtle"
         size="sm"

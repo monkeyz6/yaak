@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { HStack, Icon, type IconProps, LoadingIcon, Overlay, VStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import { atom } from "jotai";
@@ -298,6 +299,7 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
     }: MenuProps,
     ref,
   ) => {
+    const { t } = useTranslation();
     const [selectedIndex, setSelectedIndex] = useStateWithDeps<number | null>(
       defaultSelectedIndex ?? -1,
       [defaultSelectedIndex],
@@ -741,7 +743,9 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
             </HStack>
           )}
           {filteredItems.length === 0 && (
-            <span className="text-text-subtlest text-center px-2 py-1">No matches</span>
+            <span className="text-text-subtlest text-center px-2 py-1">
+              {t("common.noMatches")}
+            </span>
           )}
           {filteredItems.map((item, i) => {
             if (item.hidden) {

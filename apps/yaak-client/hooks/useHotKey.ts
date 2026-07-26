@@ -1,5 +1,6 @@
 import { type } from "@tauri-apps/plugin-os";
 import { debounce } from "@yaakapp-internal/lib";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { settingsAtom } from "@yaakapp-internal/models";
 import { atom, useAtomValue } from "jotai";
 import { useEffect } from "react";
@@ -156,6 +157,52 @@ const hotkeyLabels: Record<HotkeyAction, string> = {
   "workspace_settings.show": "Open Workspace Settings",
 };
 
+const hotkeyLabelKeys: Record<HotkeyAction, string> = {
+  "app.zoom_in": "hotkeys.actions.zoomIn",
+  "app.zoom_out": "hotkeys.actions.zoomOut",
+  "app.zoom_reset": "hotkeys.actions.zoomReset",
+  "command_palette.toggle": "hotkeys.actions.toggleCommandPalette",
+  "cookies_editor.show": "hotkeys.actions.showCookies",
+  "editor.autocomplete": "hotkeys.actions.triggerAutocomplete",
+  "environment_editor.toggle": "hotkeys.actions.editEnvironments",
+  "hotkeys.showHelp": "hotkeys.actions.showKeyboardShortcuts",
+  "model.create": "hotkeys.actions.newRequest",
+  "model.duplicate": "hotkeys.actions.duplicateRequest",
+  "request.rename": "hotkeys.actions.renameActiveRequest",
+  "request.send": "hotkeys.actions.sendActiveRequest",
+  "switcher.next": "hotkeys.actions.goToPreviousRequest",
+  "switcher.prev": "hotkeys.actions.goToNextRequest",
+  "switcher.toggle": "hotkeys.actions.toggleRequestSwitcher",
+  "settings.show": "hotkeys.actions.openSettings",
+  "sidebar.filter": "hotkeys.actions.filterSidebar",
+  "sidebar.expand_all": "hotkeys.actions.expandAllFolders",
+  "sidebar.collapse_all": "hotkeys.actions.collapseAllFolders",
+  "sidebar.selected.delete": "hotkeys.actions.deleteSelectedSidebarItem",
+  "sidebar.selected.duplicate": "hotkeys.actions.duplicateSelectedSidebarItem",
+  "sidebar.selected.move": "hotkeys.actions.moveSelectedToWorkspace",
+  "sidebar.selected.rename": "hotkeys.actions.renameSelectedSidebarItem",
+  "sidebar.focus": "hotkeys.actions.focusOrToggleSidebar",
+  "sidebar.context_menu": "hotkeys.actions.showContextMenu",
+  "url_bar.focus": "hotkeys.actions.focusUrl",
+  "workspace_settings.show": "hotkeys.actions.openWorkspaceSettings",
+};
+
+const hotkeyScopeKeys: Record<string, string> = {
+  app: "hotkeys.scopes.app",
+  command_palette: "hotkeys.scopes.commandPalette",
+  cookies_editor: "hotkeys.scopes.cookiesEditor",
+  editor: "hotkeys.scopes.editor",
+  environment_editor: "hotkeys.scopes.environmentEditor",
+  hotkeys: "hotkeys.scopes.hotkeys",
+  model: "hotkeys.scopes.model",
+  request: "hotkeys.scopes.request",
+  switcher: "hotkeys.scopes.switcher",
+  settings: "hotkeys.scopes.settings",
+  sidebar: "hotkeys.scopes.sidebar",
+  url_bar: "hotkeys.scopes.urlBar",
+  workspace_settings: "hotkeys.scopes.workspaceSettings",
+};
+
 const layoutInsensitiveKeys = [
   "Equal",
   "Minus",
@@ -309,12 +356,21 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 export function useHotkeyLabel(action: HotkeyAction): string {
-  return hotkeyLabels[action];
+  const { t } = useTranslation();
+  return t(hotkeyLabelKeys[action]);
+}
+
+export function getHotkeyLabelKey(action: HotkeyAction): string {
+  return hotkeyLabelKeys[action];
 }
 
 export function getHotkeyScope(action: HotkeyAction): string {
   const scope = action.split(".")[0];
   return scope || "";
+}
+
+export function getHotkeyScopeKey(action: HotkeyAction): string {
+  return hotkeyScopeKeys[getHotkeyScope(action)] ?? getHotkeyScope(action);
 }
 
 export function formatHotkeyString(trigger: string): string[] {

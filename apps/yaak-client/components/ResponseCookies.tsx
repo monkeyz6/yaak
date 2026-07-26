@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpResponse } from "@yaakapp-internal/models";
 import classNames from "classnames";
 import { useMemo } from "react";
@@ -81,6 +82,7 @@ function parseSetCookieHeader(setCookieHeader: string): ParsedCookie {
 }
 
 export function ResponseCookies({ response }: Props) {
+  const { t } = useTranslation();
   const { data: events } = useHttpResponseEvents(response);
 
   const { sentCookies, receivedCookies } = useMemo(() => {
@@ -121,7 +123,7 @@ export function ResponseCookies({ response }: Props) {
         storageKey={`${response.requestId}.sent_cookies`}
         summary={
           <h2 className="flex items-center">
-            Sent Cookies <CountBadge showZero count={sentCookies.length} />
+            {t("response.sentCookies")} <CountBadge showZero count={sentCookies.length} />
           </h2>
         }
       >
@@ -144,7 +146,7 @@ export function ResponseCookies({ response }: Props) {
         storageKey={`${response.requestId}.received_cookies`}
         summary={
           <h2 className="flex items-center">
-            Received Cookies <CountBadge showZero count={receivedCookies.length} />
+            {t("response.receivedCookies")} <CountBadge showZero count={receivedCookies.length} />
           </h2>
         }
       >
@@ -168,7 +170,7 @@ export function ResponseCookies({ response }: Props) {
                   </span>
                   {cookie.isDeleted && (
                     <span className="text-xs font-sans text-danger bg-danger/10 px-1.5 py-0.5 rounded-sm">
-                      Deleted
+                      {t("response.cookieDeleted")}
                     </span>
                   )}
                 </div>
@@ -221,5 +223,6 @@ export function ResponseCookies({ response }: Props) {
 }
 
 function NoCookies() {
-  return <span className="text-text-subtlest text-sm italic">No Cookies</span>;
+  const { t } = useTranslation();
+  return <span className="text-text-subtlest text-sm italic">{t("response.noCookies")}</span>;
 }

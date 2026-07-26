@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from "@yaakapp-internal/i18n";
 import { createWorkspaceModel, foldersAtom, patchModel } from "@yaakapp-internal/models";
 import { HStack, Icon, InlineCode, VStack } from "@yaakapp-internal/ui";
 import { useAtomValue } from "jotai";
@@ -42,6 +43,7 @@ export type FolderSettingsTab =
   | typeof TAB_VARIABLES;
 
 export function FolderSettingsDialog({ folderId, tab }: Props) {
+  const { t } = useTranslation();
   const folders = useAtomValue(foldersAtom);
   const folder = folders.find((f) => f.id === folderId) ?? null;
   const ancestors = useModelAncestors(folder);
@@ -62,22 +64,22 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
     return [
       {
         value: TAB_GENERAL,
-        label: "General",
+        label: t("settings.general"),
       },
       {
         value: TAB_SETTINGS,
-        label: "Settings",
+        label: t("common.settings"),
         rightSlot: <CountBadge count={numSettingsOverrides} />,
       },
       ...headersTab,
       ...authTab,
       {
         value: TAB_VARIABLES,
-        label: "Variables",
+        label: t("environment.variables"),
         rightSlot: numVars > 0 ? <CountBadge count={numVars} /> : null,
       },
     ];
-  }, [authTab, folder, headersTab, numSettingsOverrides, numVars]);
+  }, [authTab, folder, headersTab, numSettingsOverrides, numVars, t]);
 
   if (folder == null) return null;
 
@@ -88,9 +90,7 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
         <div className="flex items-center gap-1.5 font-semibold text-text min-w-0 overflow-hidden flex-1">
           {breadcrumbs.map((item, index) => (
             <Fragment key={item.id}>
-              {index > 0 && (
-                <Icon icon="chevron_right" size="lg" className="opacity-50 shrink-0" />
-              )}
+              {index > 0 && <Icon icon="chevron_right" size="lg" className="opacity-50 shrink-0" />}
               <span className="text-text-subtle truncate min-w-0" title={item.name}>
                 {item.name}
               </span>
@@ -107,7 +107,7 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
 
       <Tabs
         defaultValue={tab ?? TAB_GENERAL}
-        label="Folder Settings"
+        label={t("contextMenu.folderSettings")}
         className="pt-2 pb-2 pl-3 pr-1 flex-1"
         layout="horizontal"
         addBorders
@@ -119,14 +119,14 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
         <TabContent value={TAB_GENERAL} className="overflow-y-auto h-full px-4">
           <div className="grid grid-rows-[auto_minmax(0,1fr)_auto] gap-3 pb-3 h-full">
             <Input
-              label="Folder Name"
+              label={t("folder.name")}
               defaultValue={folder.name}
               onChange={(name) => patchModel(folder, { name })}
               stateKey={`name.${folder.id}`}
             />
             <MarkdownEditor
               name="folder-description"
-              placeholder="Folder description"
+              placeholder={t("folder.description")}
               className="border border-border px-2"
               defaultValue={folder.description}
               stateKey={`description.${folder.id}`}
@@ -144,7 +144,7 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
                 variant="border"
                 size="xs"
               >
-                Delete Folder
+                {t("folder.delete")}
               </Button>
               <InlineCode className="flex gap-1 items-center text-primary pl-2.5">
                 {folder.id}
@@ -152,7 +152,7 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
                   className="opacity-70 text-primary!"
                   size="2xs"
                   iconSize="sm"
-                  title="Copy folder ID"
+                  title={t("folder.copyId")}
                   text={folder.id}
                 />
               </InlineCode>
@@ -176,11 +176,14 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
             <EmptyStateText>
               <VStack alignItems="center" space={1.5}>
                 <p>
-                  Override{" "}
-                  <Link href="https://yaak.app/docs/using-yaak/environments-and-variables">
-                    Variables
-                  </Link>{" "}
-                  for requests within this folder.
+                  <Trans
+                    i18nKey="folder.overrideVariablesIntro"
+                    components={{
+                      1: (
+                        <Link href="https://yaak.app/docs/using-yaak/environments-and-variables" />
+                      ),
+                    }}
+                  />
                 </p>
                 <Button
                   variant="border"
@@ -191,11 +194,11 @@ export function FolderSettingsDialog({ folderId, tab }: Props) {
                       parentModel: "folder",
                       parentId: folder.id,
                       model: "environment",
-                      name: "Folder Environment",
+                      name: t("folder.environmentName"),
                     });
                   }}
                 >
-                  Create Folder Environment
+                  {t("folder.createEnvironment")}
                 </Button>
               </VStack>
             </EmptyStateText>

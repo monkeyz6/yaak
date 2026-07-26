@@ -1,4 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { Workspace } from "@yaakapp-internal/models";
 import { workspacesAtom } from "@yaakapp-internal/models";
 import { HStack, VStack } from "@yaakapp-internal/ui";
@@ -6,7 +7,6 @@ import { useAtomValue } from "jotai";
 import { useCallback, useMemo, useState } from "react";
 import slugify from "slugify";
 import { activeWorkspaceAtom } from "../hooks/useActiveWorkspace";
-import { pluralizeCount } from "../lib/pluralize";
 import { invokeCmd } from "../lib/tauri";
 import { CommercialUseBanner } from "./CommercialUseBanner";
 import { Button } from "./core/Button";
@@ -43,6 +43,7 @@ function ExportDataDialogContent({
   allWorkspaces: Workspace[];
   activeWorkspace: Workspace;
 }) {
+  const { t } = useTranslation();
   const [includePrivateEnvironments, setIncludePrivateEnvironments] = useState<boolean>(false);
   const [selectedWorkspaces, setSelectedWorkspaces] = useState<Record<string, boolean>>({
     [activeWorkspace.id]: true,
@@ -66,7 +67,7 @@ function ExportDataDialogContent({
     const workspace = ids.length === 1 ? workspaces.find((w) => w.id === ids[0]) : undefined;
     const slug = workspace ? slugify(workspace.name, { lower: true }) : "workspaces";
     const exportPath = await save({
-      title: "Export Data",
+      title: t("mainMenu.exportData"),
       defaultPath: `yaak.${slug}.json`,
     });
     if (exportPath == null) {
@@ -80,7 +81,7 @@ function ExportDataDialogContent({
     });
     onHide();
     onSuccess(exportPath);
-  }, [includePrivateEnvironments, onHide, onSuccess, selectedWorkspaces, workspaces]);
+  }, [includePrivateEnvironments, onHide, onSuccess, selectedWorkspaces, t, workspaces]);
 
   const allSelected = workspaces.every((w) => selectedWorkspaces[w.id]);
   const numSelected = Object.values(selectedWorkspaces).filter(Boolean).length;
@@ -88,7 +89,7 @@ function ExportDataDialogContent({
   return (
     <div className="h-full w-full grid grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-b-lg">
       <VStack space={3} className="overflow-auto px-5 pb-6">
-        <CommercialUseBanner source="data-export" title="Exporting work data?" />
+        <CommercialUseBanner source="data-export" title={t("importExport.exportingWorkData")} />
 
         <table className="w-full mb-auto min-w-full max-w-full divide-y divide-surface-highlight">
           <thead>
@@ -97,12 +98,12 @@ function ExportDataDialogContent({
                 <Checkbox
                   checked={!allSelected && !noneSelected ? "indeterminate" : allSelected}
                   hideLabel
-                  title="All workspaces"
+                  title={t("importExport.allWorkspaces")}
                   onChange={handleToggleAll}
                 />
               </th>
               <th className="py-2 text-left pl-4" onClick={handleToggleAll}>
-                Workspace
+                {t("deleteModel.model.workspace")}
               </th>
             </tr>
           </thead>
@@ -125,30 +126,31 @@ function ExportDataDialogContent({
                     setSelectedWorkspaces((prev) => ({ ...prev, [w.id]: !prev[w.id] }))
                   }
                 >
-                  {w.name} {w.id === activeWorkspace.id ? "(current workspace)" : ""}
+                  {w.name}{" "}
+                  {w.id === activeWorkspace.id ? t("importExport.currentWorkspaceSuffix") : ""}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <DetailsBanner color="secondary" defaultOpen summary="Extra Settings">
+        <DetailsBanner color="secondary" defaultOpen summary={t("importExport.extraSettings")}>
           <Checkbox
             checked={includePrivateEnvironments}
             onChange={setIncludePrivateEnvironments}
-            title="Include private environments"
-            help='Environments marked as "sharable" will be exported by default'
+            title={t("importExport.includePrivateEnvironments")}
+            help={t("importExport.includePrivateEnvironmentsHelp")}
           />
         </DetailsBanner>
       </VStack>
       <footer className="px-5 grid grid-cols-[1fr_auto] items-center bg-surface py-3 border-t border-border-subtle">
         <div>
           <Link href="https://yaak.app/button/new" noUnderline className="text-text-subtlest">
-            Create Run Button
+            {t("mainMenu.createRunButton")}
           </Link>
         </div>
         <HStack space={2} justifyContent="end">
           <Button size="sm" className="focus" variant="border" onClick={onHide}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             size="sm"
@@ -158,8 +160,11 @@ function ExportDataDialogContent({
             disabled={noneSelected}
             onClick={() => handleExport()}
           >
-            Export{" "}
-            {pluralizeCount("Workspace", numSelected, { omitSingle: true, noneWord: "Nothing" })}
+            {numSelected === 0
+              ? t("importExport.exportNothing")
+              : numSelected === 1
+                ? t("importExport.exportWorkspace")
+                : t("importExport.exportWorkspaces", { count: numSelected })}
           </Button>
         </HStack>
       </footer>

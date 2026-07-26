@@ -8,6 +8,7 @@ import { emacs } from "@replit/codemirror-emacs";
 import { vim } from "@replit/codemirror-vim";
 
 import { vscodeKeymap } from "@replit/codemirror-vscode-keymap";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { EditorKeymap } from "@yaakapp-internal/models";
 import { settingsAtom } from "@yaakapp-internal/models";
 import type { EditorLanguage, TemplateFunction } from "@yaakapp-internal/plugins";
@@ -141,6 +142,7 @@ function EditorInner({
   wrapLines,
   setRef,
 }: EditorProps) {
+  const { t } = useTranslation();
   const settings = useAtomValue(settingsAtom);
 
   const allEnvironmentVariables = useEnvironmentVariables(forcedEnvironmentId ?? null);
@@ -495,7 +497,7 @@ function EditorInner({
           showConfirm
           key="format"
           size="sm"
-          title="Reformat contents"
+          title={t("common.reformatContents")}
           icon="magic_wand"
           variant="border"
           className={classNames(actionClassName)}
@@ -526,7 +528,7 @@ function EditorInner({
       }),
     );
     return results;
-  }, [actions, format, onChange]);
+  }, [actions, format, onChange, t]);
 
   const cmContainer = (
     <div

@@ -4,6 +4,7 @@ import { useActiveWorkspaceChangedToast } from "../hooks/useActiveWorkspaceChang
 import { useHotKey, useSubscribeHotKeys } from "../hooks/useHotKey";
 import { useSubscribeHttpAuthentication } from "../hooks/useHttpAuthentication";
 import { useSyncFontSizeSetting } from "../hooks/useSyncFontSizeSetting";
+import { useSyncLanguageSetting } from "../hooks/useSyncLanguageSetting";
 import { useSyncWorkspaceChildModels } from "../hooks/useSyncWorkspaceChildModels";
 import { useSyncZoomSetting } from "../hooks/useSyncZoomSetting";
 import { useSubscribeTemplateFunctions } from "../hooks/useTemplateFunctions";
@@ -13,6 +14,7 @@ import { renameModelWithPrompt } from "../lib/renameModelWithPrompt";
 export function GlobalHooks() {
   useSyncZoomSetting();
   useSyncFontSizeSetting();
+  useSyncLanguageSetting();
 
   useSubscribeActiveWorkspaceId();
 

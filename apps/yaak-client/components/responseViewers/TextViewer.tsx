@@ -1,16 +1,19 @@
 import classNames from "classnames";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { ReactNode } from "react";
 import { Children, useCallback, useMemo } from "react";
 import { createGlobalState } from "react-use";
 import { useDebouncedValue } from "@yaakapp-internal/ui";
 import { useFormatText } from "../../hooks/useFormatText";
+import type { JsonPathAtPosition } from "../../lib/responseJsonPath";
 import type { EditorProps } from "../core/Editor/Editor";
 import { hyperlink } from "../core/Editor/hyperlink/extension";
 import { Editor } from "../core/Editor/LazyEditor";
+import { postActionExtractor } from "../core/Editor/postAction/extension";
 import { IconButton } from "../core/IconButton";
 import { Input } from "../core/Input";
 
-const extraExtensions = [hyperlink];
+const defaultExtraExtensions = [hyperlink];
 
 interface Props {
   text: string;
@@ -25,6 +28,8 @@ interface Props {
     isPending: boolean;
     error: boolean;
   };
+  /** Offer to extract hovered JSON values into a post-response action */
+  onExtractJsonPath?: (result: JsonPathAtPosition) => void;
 }
 
 const useFilterText = createGlobalState<Record<string, string | null>>({});
@@ -38,7 +43,16 @@ export function TextViewer({
   className,
   footerActions,
   onFilter,
+  onExtractJsonPath,
 }: Props) {
+  const { t } = useTranslation();
+  const extraExtensions = useMemo(
+    () =>
+      onExtractJsonPath != null && language === "json"
+        ? [hyperlink, postActionExtractor(onExtractJsonPath)]
+        : defaultExtraExtensions,
+    [onExtractJsonPath, language],
+  );
   const filterKey = filterStateKey ?? stateKey;
   const [filterTextMap, setFilterTextMap] = useFilterText();
   const filterText = filterKey ? (filterTextMap[filterKey] ?? null) : null;
@@ -82,8 +96,10 @@ export function TextViewer({
             autoFocus
             containerClassName="bg-surface"
             size="sm"
-            placeholder={language === "json" ? "JSONPath expression" : "XPath expression"}
-            label="Filter expression"
+            placeholder={
+              language === "json" ? t("response.jsonPathExpression") : t("response.xpathExpression")
+            }
+            label={t("response.filterExpression")}
             name="filter"
             defaultValue={filterText}
             onKeyDown={(e) => e.key === "Escape" && toggleSearch()}
@@ -100,7 +116,7 @@ export function TextViewer({
         size="sm"
         isLoading={filteredResponse.isPending}
         icon={isSearching ? "x" : "filter"}
-        title={isSearching ? "Close filter" : "Filter response"}
+        title={isSearching ? t("response.closeFilter") : t("response.filterResponse")}
         onClick={toggleSearch}
         className={classNames("border border-border-subtle!", isSearching && "opacity-100!")}
       />,

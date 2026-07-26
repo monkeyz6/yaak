@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from "@yaakapp-internal/i18n";
 import { patchModel, workspaceMetasAtom, workspacesAtom } from "@yaakapp-internal/models";
 import { Banner, HStack, InlineCode } from "@yaakapp-internal/ui";
 import { useAtomValue } from "jotai";
@@ -43,6 +44,7 @@ export type WorkspaceSettingsTab =
 const DEFAULT_TAB: WorkspaceSettingsTab = TAB_GENERAL;
 
 export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
+  const { t } = useTranslation();
   const workspace = useAtomValue(workspacesAtom).find((w) => w.id === workspaceId);
   const workspaceMeta = useAtomValue(workspaceMetasAtom).find((m) => m.workspaceId === workspaceId);
   const authTab = useAuthTab(TAB_AUTH, workspace ?? null);
@@ -52,7 +54,7 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
   if (workspace == null) {
     return (
       <Banner color="danger">
-        <InlineCode>Workspace</InlineCode> not found
+        <Trans i18nKey="workspace.notFound" components={{ 1: <InlineCode /> }} />
       </Banner>
     );
   }
@@ -60,22 +62,22 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
   if (workspaceMeta == null)
     return (
       <Banner color="danger">
-        <InlineCode>WorkspaceMeta</InlineCode> not found for workspace
+        <Trans i18nKey="workspace.metaNotFound" components={{ 1: <InlineCode /> }} />
       </Banner>
     );
 
   return (
     <Tabs
       defaultValue={tab ?? DEFAULT_TAB}
-      label="Folder Settings"
+      label={t("workspace.settings")}
       className="pt-4 pb-2 px-3"
       tabListClassName="pl-4"
       addBorders
       tabs={[
-        { value: TAB_GENERAL, label: "Workspace" },
+        { value: TAB_GENERAL, label: t("workspace.workspace") },
         {
           value: TAB_SETTINGS,
-          label: "Settings",
+          label: t("common.settings"),
         },
         ...headersTab,
         ...authTab,
@@ -96,7 +98,7 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
       <TabContent value={TAB_HEADERS} className="overflow-y-auto h-full px-4">
         <HeadersEditor
           inheritedHeaders={inheritedHeaders}
-          inheritedHeadersLabel="Defaults"
+          inheritedHeadersLabel={t("workspace.defaults")}
           forceUpdateKey={workspace.id}
           headers={workspace.headers}
           onChange={(headers) => patchModel(workspace, { headers })}
@@ -124,8 +126,8 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
           <PlainInput
             required
             hideLabel
-            placeholder="Workspace Name"
-            label="Name"
+            placeholder={t("workspace.namePlaceholder")}
+            label={t("workspace.name")}
             defaultValue={workspace.name}
             className="text-base! font-sans"
             onChange={(name) => patchModel(workspace, { name })}
@@ -133,7 +135,7 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
 
           <MarkdownEditor
             name="workspace-description"
-            placeholder="Workspace description"
+            placeholder={t("workspace.description")}
             className="border border-border px-2"
             defaultValue={workspace.description}
             stateKey={`description.${workspace.id}`}
@@ -156,7 +158,7 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
               variant="border"
               size="xs"
             >
-              Delete Workspace
+              {t("workspace.deleteWorkspace")}
             </Button>
             <InlineCode className="flex gap-1 items-center text-primary pl-2.5">
               {workspaceId}
@@ -164,7 +166,7 @@ export function WorkspaceSettingsDialog({ workspaceId, hide, tab }: Props) {
                 className="opacity-70 text-primary!"
                 size="2xs"
                 iconSize="sm"
-                title="Copy workspace ID"
+                title={t("workspace.copyId")}
                 text={workspaceId}
               />
             </InlineCode>

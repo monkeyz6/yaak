@@ -1,4 +1,5 @@
 import { type MultipartPart, parseMultipart } from "@mjackson/multipart-parser";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { lazy, Suspense, useMemo } from "react";
 import { languageFromContentType } from "../../lib/contentType";
 import { Banner, Icon, LoadingIcon } from "@yaakapp-internal/ui";
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export function MultipartViewer({ data, boundary, idPrefix = "multipart" }: Props) {
+  const { t } = useTranslation();
   const parseResult = useMemo(() => {
     try {
       const maxFileSize = 1024 * 1024 * 10; // 10MB
@@ -36,7 +38,7 @@ export function MultipartViewer({ data, boundary, idPrefix = "multipart" }: Prop
   if (error) {
     return (
       <Banner color="danger" className="m-3">
-        Failed to parse multipart data: {error}
+        {t("response.multipartParseFailed", { message: error })}
       </Banner>
     );
   }
@@ -44,7 +46,7 @@ export function MultipartViewer({ data, boundary, idPrefix = "multipart" }: Prop
   if (parts.length === 0) {
     return (
       <Banner color="info" className="m-3">
-        No multipart parts found
+        {t("response.noMultipartParts")}
       </Banner>
     );
   }
@@ -52,7 +54,7 @@ export function MultipartViewer({ data, boundary, idPrefix = "multipart" }: Prop
   return (
     <Tabs
       addBorders
-      label="Multipart"
+      label={t("request.multipart")}
       layout="horizontal"
       tabListClassName="border-r border-r-border -ml-3"
       tabs={parts.map((part, i) => ({

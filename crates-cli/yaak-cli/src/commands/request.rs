@@ -524,7 +524,15 @@ async fn send_http_request_by_id(
 
     let _ = event_handle.await;
     let _ = body_handle.await;
-    result.map_err(|e| e.to_string())?;
+    let result = result.map_err(|e| e.to_string())?;
+    for outcome in result.post_action_outcomes {
+        if outcome.status != "success" {
+            eprintln!(
+                "Post-response action for '{}': {}",
+                outcome.variable_name, outcome.message
+            );
+        }
+    }
     Ok(())
 }
 

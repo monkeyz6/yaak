@@ -1,4 +1,5 @@
 import { type } from "@tauri-apps/plugin-os";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { settingsAtom, workspacesAtom } from "@yaakapp-internal/models";
 import { Banner, HeaderSize, HStack, SidebarLayout } from "@yaakapp-internal/ui";
 import classNames from "classnames";
@@ -52,6 +53,7 @@ export function Workspace() {
   useGlobalWorkspaceHooks();
 
   const workspaces = useAtomValue(workspacesAtom);
+  const { t } = useTranslation();
   const settings = useAtomValue(settingsAtom);
   const osType = type();
   const [width, setWidth] = useSidebarWidth();
@@ -80,6 +82,12 @@ export function Workspace() {
       hideWindowControls={settings.hideWindowControls}
       useNativeTitlebar={settings.useNativeTitlebar}
       interfaceScale={settings.interfaceScale}
+      windowControlLabels={{
+        minimize: t("windowControls.minimize"),
+        maximize: t("windowControls.maximize"),
+        unmaximize: t("windowControls.unmaximize"),
+        close: t("windowControls.close"),
+      }}
     >
       <div className="absolute inset-0 pointer-events-none">
         <div style={environmentBgStyle} className="absolute inset-0 opacity-[0.07]" />

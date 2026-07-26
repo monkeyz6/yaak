@@ -1,3 +1,4 @@
+import { i18n } from "@yaakapp-internal/i18n";
 import type { SettingsTab } from "../components/Settings/Settings";
 import { activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
 import { createFastMutation } from "../hooks/useFastMutation";
@@ -23,7 +24,7 @@ export const openSettings = createFastMutation<void, string, SettingsTabWithSubt
     await invokeCmd("cmd_new_child_window", {
       url: location.href,
       label: "settings",
-      title: "Yaak Settings",
+      title: i18n.t("settings.windowTitle"),
       innerSize: [750, 600],
     });
   },

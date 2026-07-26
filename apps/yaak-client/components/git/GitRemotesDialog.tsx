@@ -1,4 +1,5 @@
 import { useGit } from "@yaakapp-internal/git";
+import { i18n, useTranslation } from "@yaakapp-internal/i18n";
 import { showDialog } from "../../lib/dialog";
 import { Button } from "../core/Button";
 import { IconButton } from "../core/IconButton";
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function GitRemotesDialog({ dir }: Props) {
+  const { t } = useTranslation();
   const callbacks = useGitCallbacks(dir);
   const [{ remotes }, { rmRemote }] = useGit(dir, callbacks);
 
@@ -26,18 +28,18 @@ export function GitRemotesDialog({ dir }: Props) {
     <Table scrollable>
       <TableHead>
         <TableRow>
-          <TableHeaderCell>Name</TableHeaderCell>
+          <TableHeaderCell>{t("git.name")}</TableHeaderCell>
           <TableHeaderCell>URL</TableHeaderCell>
           <TableHeaderCell>
             <Button
               className="text-text-subtle ml-auto"
               size="2xs"
               color="primary"
-              title="Add remote"
+              title={t("git.addRemote")}
               variant="border"
               onClick={() => addGitRemote(dir)}
             >
-              Add Remote
+              {t("git.addRemote")}
             </Button>
           </TableHeaderCell>
         </TableRow>
@@ -52,7 +54,7 @@ export function GitRemotesDialog({ dir }: Props) {
                 size="sm"
                 className="text-text-subtle ml-auto"
                 icon="trash"
-                title="Remove remote"
+                title={t("git.removeRemote")}
                 onClick={() => rmRemote.mutate({ name: r.name })}
               />
             </TableCell>
@@ -66,7 +68,7 @@ export function GitRemotesDialog({ dir }: Props) {
 GitRemotesDialog.show = (dir: string) => {
   showDialog({
     id: "git-remotes",
-    title: "Manage Remotes",
+    title: i18n.t("git.manageRemotes"),
     size: "md",
     render: ({ hide }) => <GitRemotesDialog onDone={hide} dir={dir} />,
   });

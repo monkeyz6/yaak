@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { ShowToastRequest } from "@yaakapp-internal/plugins";
 import { Icon, type IconProps, VStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
@@ -46,6 +47,7 @@ export function Toast({
   dynamicHeight,
   hideDismiss,
 }: ToastProps) {
+  const { t } = useTranslation();
   const onCloseRef = useRef(onClose);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [autoHideCanceled, setAutoHideCanceled] = useState(false);
@@ -126,7 +128,7 @@ export function Toast({
             color={color}
             variant="border"
             className="opacity-60 border-0 absolute! top-2 right-2"
-            title="Dismiss"
+            title={t("common.dismiss")}
             icon="x"
             onClick={onClose}
           />

@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpRequest } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import classNames from "classnames";
@@ -33,6 +34,7 @@ export const RequestMethodDropdown = memo(function RequestMethodDropdown({
   request,
   className,
 }: Props) {
+  const { t } = useTranslation();
   const handleChange = useCallback(
     async (method: string) => {
       await patchModel(request, { method });
@@ -44,15 +46,15 @@ export const RequestMethodDropdown = memo(function RequestMethodDropdown({
     () => [
       {
         key: "custom",
-        label: "CUSTOM",
+        label: t("request.customMethodItem"),
         leftSlot: <Icon icon="sparkles" />,
         onSelect: async () => {
           const newMethod = await showPrompt({
             id: "custom-method",
-            label: "Http Method",
-            title: "Custom Method",
-            confirmText: "Save",
-            description: "Enter a custom method name",
+            label: t("request.httpMethod"),
+            title: t("request.customMethod"),
+            confirmText: t("common.save"),
+            description: t("request.enterCustomMethod"),
             placeholder: "CUSTOM",
           });
           if (newMethod == null) return;
@@ -60,7 +62,7 @@ export const RequestMethodDropdown = memo(function RequestMethodDropdown({
         },
       },
     ],
-    [handleChange],
+    [handleChange, t],
   );
 
   return (

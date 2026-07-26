@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import classNames from "classnames";
 import { useMemo, useRef } from "react";
 import { useActiveRequest } from "../hooks/useActiveRequest";
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function RecentRequestsDropdown({ className }: Props) {
+  const { t } = useTranslation();
   const activeRequest = useActiveRequest();
   const dropdownRef = useRef<DropdownRef>(null);
   const [recentRequestIds] = useRecentRequests();
@@ -74,14 +76,14 @@ export function RecentRequestsDropdown({ className }: Props) {
       return [
         {
           key: "no-recent-requests",
-          label: "No recent requests",
+          label: t("common.noRecentRequests"),
           disabled: true,
         },
       ];
     }
 
     return recentRequestItems.slice(0, 20);
-  }, [recentRequestIds]);
+  }, [recentRequestIds, t]);
 
   return (
     <Dropdown ref={dropdownRef} items={items}>

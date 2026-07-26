@@ -1,4 +1,5 @@
 import type { HttpRequest } from "@yaakapp-internal/models";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { patchModel } from "@yaakapp-internal/models";
 import type { GenericCompletionOption } from "@yaakapp-internal/plugins";
 import classNames from "classnames";
@@ -41,7 +42,6 @@ import { CountBadge } from "./core/CountBadge";
 import type { GenericCompletionConfig } from "./core/Editor/genericCompletion";
 import { getUrlCompletionConfig } from "./core/Editor/url/completion";
 import { Editor } from "./core/Editor/LazyEditor";
-import { InlineCode } from "@yaakapp-internal/ui";
 import type { Pair } from "./core/PairEditor";
 import { PlainInput } from "./core/PlainInput";
 import type { TabItem, TabsRef } from "./core/Tabs/Tabs";
@@ -57,6 +57,7 @@ import { RequestMethodDropdown } from "./RequestMethodDropdown";
 import { countOverriddenSettings, ModelSettingsEditor } from "./ModelSettingsEditor";
 import { UrlBar } from "./UrlBar";
 import { UrlParametersEditor } from "./UrlParameterEditor";
+import { PostResponseActionsEditor } from "./PostResponseActionsEditor";
 
 const GraphQLEditor = lazy(() =>
   import("./graphql/GraphQLEditor").then((m) => ({ default: m.GraphQLEditor })),
@@ -74,8 +75,10 @@ const TAB_PARAMS = "params";
 const TAB_HEADERS = "headers";
 const TAB_AUTH = "auth";
 const TAB_SETTINGS = "settings";
+export const TAB_POST_RESPONSE = "post-response";
 const TAB_DESCRIPTION = "description";
-const TABS_STORAGE_KEY = "http_request_tabs";
+export const HTTP_REQUEST_TABS_STORAGE_KEY = "http_request_tabs";
+const TABS_STORAGE_KEY = HTTP_REQUEST_TABS_STORAGE_KEY;
 
 const nonActiveRequestUrlsAtom = atom((get) => {
   const activeRequestId = get(activeRequestIdAtom);
@@ -88,6 +91,7 @@ const nonActiveRequestUrlsAtom = atom((get) => {
 const memoNotActiveRequestUrlsAtom = deepEqualAtom(nonActiveRequestUrlsAtom);
 
 export function HttpRequestPane({ style, fullHeight, className, activeRequest }: Props) {
+  const { t } = useTranslation();
   const activeRequestId = activeRequest.id;
   const tabsRef = useRef<TabsRef>(null);
   const [forceUpdateHeaderEditorKey, setForceUpdateHeaderEditorKey] = useState<number>(0);
@@ -166,21 +170,25 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
         options: {
           value: activeRequest.bodyType,
           items: [
-            { type: "separator", label: "Form Data" },
-            { label: "Url Encoded", value: BODY_TYPE_FORM_URLENCODED },
-            { label: "Multi-Part", value: BODY_TYPE_FORM_MULTIPART },
-            { type: "separator", label: "Text Content" },
+            { type: "separator", label: t("request.formData") },
+            { label: t("request.urlEncoded"), value: BODY_TYPE_FORM_URLENCODED },
+            { label: t("request.multipart"), value: BODY_TYPE_FORM_MULTIPART },
+            { type: "separator", label: t("request.textContent") },
             { label: "GraphQL", value: BODY_TYPE_GRAPHQL },
             { label: "JSON", value: BODY_TYPE_JSON },
             { label: "XML", value: BODY_TYPE_XML },
             {
-              label: "Other",
+              label: t("request.other"),
               value: BODY_TYPE_OTHER,
-              shortLabel: nameOfContentTypeOr(contentType, "Other"),
+              shortLabel: nameOfContentTypeOr(contentType, t("request.other")),
             },
-            { type: "separator", label: "Other" },
-            { label: "Binary File", value: BODY_TYPE_BINARY },
-            { label: "No Body", shortLabel: "Body", value: BODY_TYPE_NONE },
+            { type: "separator", label: t("request.other") },
+            { label: t("request.binaryFile"), value: BODY_TYPE_BINARY },
+            {
+              label: t("request.noBody"),
+              shortLabel: t("request.body"),
+              value: BODY_TYPE_NONE,
+            },
           ],
           onChange: async (bodyType) => {
             if (bodyType === activeRequest.bodyType) return;
@@ -189,11 +197,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
               if (activeRequest.method.toLowerCase() === newMethod.toLowerCase()) return;
               showToast({
                 id: "switched-method",
-                message: (
-                  <>
-                    Request method switched to <InlineCode>POST</InlineCode>
-                  </>
-                ),
+                message: t("request.methodChanged", { method: "POST" }),
               });
             };
 
@@ -241,18 +245,23 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
       {
         value: TAB_PARAMS,
         rightSlot: <CountBadge count={urlParameterPairs.length} />,
-        label: "Params",
+        label: t("request.params"),
       },
       ...headersTab,
       ...authTab,
       {
+        value: TAB_POST_RESPONSE,
+        label: t("request.afterResponse"),
+        rightSlot: <CountBadge count={activeRequest.postResponseActions.length} />,
+      },
+      {
         value: TAB_SETTINGS,
-        label: "Settings",
+        label: t("request.settings"),
         rightSlot: <CountBadge count={numSettingsOverrides} />,
       },
       {
         value: TAB_DESCRIPTION,
-        label: "Info",
+        label: t("request.info"),
       },
     ],
     [
@@ -264,6 +273,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
       numParams,
       numSettingsOverrides,
       urlParameterPairs.length,
+      t,
     ],
   );
 
@@ -354,7 +364,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
           />
           <Tabs
             ref={tabsRef}
-            label="Request"
+            label={t("request.request")}
             tabs={tabs}
             tabListClassName="mt-1 -mb-1.5"
             storageKey={TABS_STORAGE_KEY}
@@ -382,6 +392,9 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
             </TabContent>
             <TabContent value={TAB_SETTINGS}>
               <ModelSettingsEditor model={activeRequest} />
+            </TabContent>
+            <TabContent value={TAB_POST_RESPONSE}>
+              <PostResponseActionsEditor request={activeRequest} />
             </TabContent>
             <TabContent value={TAB_BODY}>
               <ConfirmLargeRequestBody request={activeRequest}>
@@ -445,14 +458,14 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
                     stateKey={`other.${activeRequest.id}`}
                   />
                 ) : (
-                  <EmptyStateText>No Body</EmptyStateText>
+                  <EmptyStateText>{t("request.noBody")}</EmptyStateText>
                 )}
               </ConfirmLargeRequestBody>
             </TabContent>
             <TabContent value={TAB_DESCRIPTION}>
               <div className="grid grid-rows-[auto_minmax(0,1fr)] h-full">
                 <PlainInput
-                  label="Request Name"
+                  label={t("request.requestName")}
                   hideLabel
                   forceUpdateKey={updateKey}
                   defaultValue={activeRequest.name}
@@ -463,7 +476,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
                 />
                 <MarkdownEditor
                   name="request-description"
-                  placeholder="Request description"
+                  placeholder={t("request.requestDescription")}
                   defaultValue={activeRequest.description}
                   stateKey={`description.${activeRequest.id}`}
                   forceUpdateKey={updateKey}

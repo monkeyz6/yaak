@@ -1,13 +1,12 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { VStack } from "@yaakapp-internal/ui";
 
 export function EncryptionHelp() {
+  const { t } = useTranslation();
   return (
     <VStack space={3}>
-      <p>Encrypt passwords, tokens, and other sensitive info when encryption is enabled.</p>
-      <p>
-        Encrypted data remains secure when syncing to the filesystem or Git, and when exporting or
-        sharing with others.
-      </p>
+      <p>{t("encryption.helpIntro")}</p>
+      <p>{t("encryption.helpDetails")}</p>
     </VStack>
   );
 }

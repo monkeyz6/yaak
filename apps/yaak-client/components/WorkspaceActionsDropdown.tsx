@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { i18n, useTranslation } from "@yaakapp-internal/i18n";
 import { getModel, settingsAtom, workspacesAtom } from "@yaakapp-internal/models";
 import classNames from "classnames";
 import { useAtomValue } from "jotai";
@@ -33,6 +34,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
   className,
   ...buttonProps
 }: Props) {
+  const { t } = useTranslation();
   const workspaces = useAtomValue(workspacesAtom);
   const workspace = useAtomValue(activeWorkspaceAtom);
   const createWorkspace = useCreateWorkspace();
@@ -44,7 +46,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
     showDialog({
       id: "clone-git-repository",
       size: "md",
-      title: "Clone Git Repository",
+      title: i18n.t("workspace.cloneGitRepository"),
       render: ({ hide }) => <CloneGitRepositoryDialog hide={hide} />,
     });
   }, []);
@@ -63,20 +65,20 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
 
     const itemsBefore: DropdownItem[] = [
       {
-        label: "New Workspace",
+        label: t("workspace.newWorkspace"),
         leftSlot: <Icon icon="plus" />,
         submenu: [
           {
-            label: "Create Empty",
+            label: t("workspace.createEmpty"),
             leftSlot: <Icon icon="plus_circle" />,
             onSelect: createWorkspace,
           },
           {
-            label: "Open Folder",
+            label: t("workspace.openFolder"),
             leftSlot: <Icon icon="folder_open" />,
             onSelect: async () => {
               const dir = await open({
-                title: "Select Workspace Directory",
+                title: i18n.t("workspace.selectWorkspaceDirectory"),
                 directory: true,
                 multiple: false,
               });
@@ -86,7 +88,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
             },
           },
           {
-            label: "Clone Git Repository",
+            label: t("workspace.cloneGitRepository"),
             leftSlot: <Icon icon="hard_drive_download" />,
             onSelect: openCloneGitRepositoryDialog,
           },
@@ -103,7 +105,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
       })),
       ...(workspaceActions.length > 0 ? [{ type: "separator" as const }] : []),
       {
-        label: "Workspace Settings",
+        label: t("workspace.settings"),
         leftSlot: <Icon icon="settings" />,
         hotKeyAction: "workspace_settings.show",
         onSelect: openWorkspaceSettings,
@@ -118,7 +120,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
         },
       },
       {
-        label: "Clear Send History",
+        label: t("workspace.clearSendHistory"),
         color: "warning",
         leftSlot: <Icon icon="history" />,
         onSelect: deleteSendHistory,
@@ -132,6 +134,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
     deleteSendHistory,
     createWorkspace,
     openCloneGitRepositoryDialog,
+    t,
     workspace?.id,
     workspace,
     workspaceActions.map,
@@ -159,7 +162,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
     showDialog({
       id: "switch-workspace",
       size: "sm",
-      title: "Switch Workspace",
+      title: i18n.t("navigation.switchWorkspace"),
       render: ({ hide }) => <SwitchWorkspaceDialog workspace={workspace} hide={hide} />,
     });
   }, []);
@@ -181,7 +184,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
         )}
         {...buttonProps}
       >
-        {workspace?.name ?? "Workspace"}
+        {workspace?.name ?? t("workspace.workspace")}
       </Button>
     </RadioDropdown>
   );

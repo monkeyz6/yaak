@@ -1,9 +1,9 @@
 use crate::error::Result;
 use crate::models::HttpRequestIden::{
     Authentication, AuthenticationType, Body, BodyType, CreatedAt, Description, FolderId, Headers,
-    Method, Name, SettingFollowRedirects, SettingRequestTimeout, SettingSendCookies,
-    SettingStoreCookies, SettingValidateCertificates, SortPriority, UpdatedAt, Url, UrlParameters,
-    WorkspaceId,
+    Method, Name, PostResponseActions, SettingFollowRedirects, SettingRequestTimeout,
+    SettingSendCookies, SettingStoreCookies, SettingValidateCertificates, SortPriority, UpdatedAt,
+    Url, UrlParameters, WorkspaceId,
 };
 use crate::util::generate_prefixed_id;
 use chrono::{NaiveDateTime, Utc};
@@ -216,7 +216,7 @@ impl Default for EditorKeymap {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(default, rename_all = "camelCase")]
 #[ts(export, export_to = "gen_models.ts")]
 #[enum_def(table_name = "settings")]
@@ -240,6 +240,9 @@ pub struct Settings {
     pub interface_font: Option<String>,
     pub interface_font_size: i32,
     pub interface_scale: f32,
+    #[serde(default = "default_language")]
+    #[ts(type = "\"system\" | \"en\" | \"zh-CN\"")]
+    pub language: String,
     pub open_workspace_new_window: Option<bool>,
     pub proxy: Option<ProxySetting>,
     pub theme_dark: String,
@@ -251,6 +254,41 @@ pub struct Settings {
     pub auto_download_updates: bool,
     pub check_notifications: bool,
     pub hotkeys: HashMap<String, Vec<String>>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            model: "settings".to_string(),
+            id: "default".to_string(),
+            created_at: Default::default(),
+            updated_at: Default::default(),
+            appearance: "system".to_string(),
+            client_certificates: Vec::new(),
+            colored_methods: false,
+            editor_font: None,
+            editor_font_size: 12,
+            editor_keymap: EditorKeymap::Default,
+            editor_soft_wrap: true,
+            hide_window_controls: false,
+            use_native_titlebar: false,
+            interface_font: None,
+            interface_font_size: 14,
+            interface_scale: 1.0,
+            language: default_language(),
+            open_workspace_new_window: None,
+            proxy: None,
+            theme_dark: "yaak-dark".to_string(),
+            theme_light: "yaak-light".to_string(),
+            update_channel: "stable".to_string(),
+            hide_license_badge: false,
+            prompt_feedback: true,
+            autoupdate: true,
+            auto_download_updates: true,
+            check_notifications: true,
+            hotkeys: HashMap::new(),
+        }
+    }
 }
 
 impl UpsertModelInfo for Settings {
@@ -297,6 +335,7 @@ impl UpsertModelInfo for Settings {
             (InterfaceFont, self.interface_font.into()),
             (InterfaceFontSize, self.interface_font_size.into()),
             (InterfaceScale, self.interface_scale.into()),
+            (Language, self.language.into()),
             (HideWindowControls, self.hide_window_controls.into()),
             (UseNativeTitlebar, self.use_native_titlebar.into()),
             (OpenWorkspaceNewWindow, self.open_workspace_new_window.into()),
@@ -325,6 +364,7 @@ impl UpsertModelInfo for Settings {
             SettingsIden::EditorFont,
             SettingsIden::InterfaceFontSize,
             SettingsIden::InterfaceScale,
+            SettingsIden::Language,
             SettingsIden::InterfaceFont,
             SettingsIden::HideWindowControls,
             SettingsIden::UseNativeTitlebar,
@@ -364,6 +404,7 @@ impl UpsertModelInfo for Settings {
             editor_soft_wrap: row.get("editor_soft_wrap")?,
             interface_font_size: row.get("interface_font_size")?,
             interface_scale: row.get("interface_scale")?,
+            language: row.get("language")?,
             interface_font: row.get("interface_font")?,
             use_native_titlebar: row.get("use_native_titlebar")?,
             open_workspace_new_window: row.get("open_workspace_new_window")?,
@@ -1116,6 +1157,39 @@ pub struct HttpUrlParameter {
     pub id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export, export_to = "gen_models.ts")]
+pub struct PostResponseAction {
+    #[ts(optional, as = "Option<String>")]
+    pub id: Option<String>,
+    #[serde(default = "default_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+    #[serde(rename = "type")]
+    #[ts(type = "\"set_environment_variable\"")]
+    pub action_type: String,
+    pub json_path: String,
+    pub variable_name: String,
+    /// Wrap the extracted value in the secure() template function before storing it
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub secure: bool,
+}
+
+impl Default for PostResponseAction {
+    fn default() -> Self {
+        Self {
+            id: None,
+            enabled: true,
+            action_type: "set_environment_variable".to_string(),
+            json_path: String::new(),
+            variable_name: String::new(),
+            secure: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema, TS)]
 #[serde(default, rename_all = "camelCase")]
 #[ts(export, export_to = "gen_models.ts")]
@@ -1144,6 +1218,7 @@ pub struct HttpRequest {
     pub url: String,
     /// URL parameters used for both path placeholders (`:id`) and query string entries.
     pub url_parameters: Vec<HttpUrlParameter>,
+    pub post_response_actions: Vec<PostResponseAction>,
     pub setting_send_cookies: InheritedBoolSetting,
     pub setting_store_cookies: InheritedBoolSetting,
     pub setting_validate_certificates: InheritedBoolSetting,
@@ -1185,6 +1260,7 @@ impl UpsertModelInfo for HttpRequest {
             (Description, self.description.into()),
             (Url, self.url.into()),
             (UrlParameters, serde_json::to_string(&self.url_parameters)?.into()),
+            (PostResponseActions, serde_json::to_string(&self.post_response_actions)?.into()),
             (Method, self.method.into()),
             (Body, serde_json::to_string(&self.body)?.into()),
             (BodyType, self.body_type.into()),
@@ -1218,6 +1294,7 @@ impl UpsertModelInfo for HttpRequest {
             AuthenticationType,
             Url,
             UrlParameters,
+            PostResponseActions,
             SortPriority,
             SettingSendCookies,
             SettingStoreCookies,
@@ -1229,6 +1306,7 @@ impl UpsertModelInfo for HttpRequest {
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let url_parameters: String = row.get("url_parameters")?;
+        let post_response_actions: String = row.get("post_response_actions")?;
         let body: String = row.get("body")?;
         let authentication: String = row.get("authentication")?;
         let headers: String = row.get("headers")?;
@@ -1255,6 +1333,8 @@ impl UpsertModelInfo for HttpRequest {
             sort_priority: row.get("sort_priority")?,
             url: row.get("url")?,
             url_parameters: serde_json::from_str(url_parameters.as_str()).unwrap_or_default(),
+            post_response_actions: serde_json::from_str(post_response_actions.as_str())
+                .unwrap_or_default(),
             setting_send_cookies: serde_json::from_str(&setting_send_cookies).unwrap_or_default(),
             setting_store_cookies: serde_json::from_str(&setting_store_cookies).unwrap_or_default(),
             setting_validate_certificates: serde_json::from_str(&setting_validate_certificates)
@@ -1824,6 +1904,16 @@ pub enum HttpResponseEventData {
         source_name: Option<String>,
     },
     Info {
+        message: String,
+    },
+    PostResponseAction {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, as = "Option<String>")]
+        action_id: Option<String>,
+        variable_name: String,
+        environment_id: String,
+        environment_name: String,
+        status: String,
         message: String,
     },
     Redirect {
@@ -2727,6 +2817,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_language() -> String {
+    "system".to_string()
+}
+
 fn default_request_message_size() -> i32 {
     DEFAULT_REQUEST_MESSAGE_SIZE
 }
@@ -2880,5 +2974,35 @@ impl AnyModel {
             AnyModel::Workspace(v) => v.name,
             _ => "No Name".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn old_settings_default_to_system_language() {
+        let settings: Settings = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(settings.language, "system");
+        assert_eq!(Settings::default().language, "system");
+    }
+
+    #[test]
+    fn old_http_requests_default_to_no_post_response_actions() {
+        let request: HttpRequest = serde_json::from_value(json!({})).unwrap();
+        assert!(request.post_response_actions.is_empty());
+    }
+
+    #[test]
+    fn post_response_actions_default_to_enabled_when_omitted() {
+        let action: PostResponseAction = serde_json::from_value(json!({
+            "type": "set_environment_variable",
+            "jsonPath": "$.token",
+            "variableName": "TOKEN"
+        }))
+        .unwrap();
+        assert!(action.enabled);
     }
 }

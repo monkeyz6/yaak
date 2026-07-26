@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from "@yaakapp-internal/i18n";
 import type { DnsOverride, Workspace } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import { fireAndForget } from "../lib/fireAndForget";
@@ -26,6 +27,7 @@ interface DnsOverrideWithId extends DnsOverride {
 }
 
 export function DnsOverridesEditor({ workspace }: Props) {
+  const { t } = useTranslation();
   const reactId = useId();
 
   // Ensure each override has an internal ID for React keys
@@ -74,9 +76,12 @@ export function DnsOverridesEditor({ workspace }: Props) {
   return (
     <VStack space={3} className="pb-3">
       <div className="text-text-subtle text-sm">
-        Override DNS resolution for specific hostnames. This works like{" "}
-        <code className="text-text-subtlest bg-surface-highlight px-1 rounded-sm">/etc/hosts</code> but
-        only for requests made from this workspace.
+        <Trans
+          i18nKey="workspace.dnsOverridesHelp"
+          components={{
+            1: <code className="text-text-subtlest bg-surface-highlight px-1 rounded-sm" />,
+          }}
+        />
       </div>
 
       {overridesWithIds.length > 0 && (
@@ -84,9 +89,9 @@ export function DnsOverridesEditor({ workspace }: Props) {
           <TableHead>
             <TableRow>
               <TableHeaderCell className="w-8" />
-              <TableHeaderCell>Hostname</TableHeaderCell>
-              <TableHeaderCell>IPv4 Address</TableHeaderCell>
-              <TableHeaderCell>IPv6 Address</TableHeaderCell>
+              <TableHeaderCell>{t("workspace.dnsHostname")}</TableHeaderCell>
+              <TableHeaderCell>{t("workspace.dnsIpv4")}</TableHeaderCell>
+              <TableHeaderCell>{t("workspace.dnsIpv6")}</TableHeaderCell>
               <TableHeaderCell className="w-10" />
             </TableRow>
           </TableHead>
@@ -105,7 +110,7 @@ export function DnsOverridesEditor({ workspace }: Props) {
 
       <HStack>
         <Button size="xs" color="secondary" variant="border" onClick={handleAdd}>
-          Add DNS Override
+          {t("workspace.dnsAddOverride")}
         </Button>
       </HStack>
     </VStack>
@@ -119,6 +124,7 @@ interface DnsOverrideRowProps {
 }
 
 function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
+  const { t } = useTranslation();
   const ipv4Value = override.ipv4.join(", ");
   const ipv6Value = override.ipv6.join(", ");
 
@@ -127,7 +133,9 @@ function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
       <TableCell>
         <Checkbox
           hideLabel
-          title={override.enabled ? "Disable override" : "Enable override"}
+          title={
+            override.enabled ? t("workspace.dnsDisableOverride") : t("workspace.dnsEnableOverride")
+          }
           checked={override.enabled ?? true}
           onChange={(enabled) => onUpdate({ enabled })}
         />
@@ -136,7 +144,7 @@ function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
         <PlainInput
           size="sm"
           hideLabel
-          label="Hostname"
+          label={t("workspace.dnsHostname")}
           placeholder="api.example.com"
           defaultValue={override.hostname}
           onChange={(hostname) => onUpdate({ hostname })}
@@ -146,7 +154,7 @@ function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
         <PlainInput
           size="sm"
           hideLabel
-          label="IPv4 addresses"
+          label={t("workspace.dnsIpv4")}
           placeholder="127.0.0.1"
           defaultValue={ipv4Value}
           onChange={(value) =>
@@ -163,7 +171,7 @@ function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
         <PlainInput
           size="sm"
           hideLabel
-          label="IPv6 addresses"
+          label={t("workspace.dnsIpv6")}
           placeholder="::1"
           defaultValue={ipv6Value}
           onChange={(value) =>
@@ -181,7 +189,7 @@ function DnsOverrideRow({ override, onUpdate, onDelete }: DnsOverrideRowProps) {
           size="xs"
           iconSize="sm"
           icon="trash"
-          title="Delete override"
+          title={t("workspace.dnsDeleteOverride")}
           onClick={onDelete}
         />
       </TableCell>

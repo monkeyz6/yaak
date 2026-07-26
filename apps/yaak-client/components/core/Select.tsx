@@ -1,4 +1,5 @@
 import { type } from "@tauri-apps/plugin-os";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { HStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import type { CSSProperties, ReactNode } from "react";
@@ -44,6 +45,7 @@ export function Select<T extends string>({
   filterable,
   size = "md",
 }: SelectProps<T>) {
+  const { t } = useTranslation();
   const [focused, setFocused] = useState<boolean>(false);
   const id = `input-${name}`;
   const isInvalidSelection = options.find((o) => "value" in o && o.value === value) == null;
@@ -94,13 +96,15 @@ export function Select<T extends string>({
               "leading-none rounded-none", // Center the text better vertically
             )}
           >
-            {isInvalidSelection && <option value={"__NONE__"}>-- Select an Option --</option>}
+            {isInvalidSelection && (
+              <option value={"__NONE__"}>-- {t("common.selectOption")} --</option>
+            )}
             {options.map((o) => {
               if (o.type === "separator") return null;
               return (
                 <option key={o.value} value={o.value}>
                   {o.label}
-                  {o.value === defaultValue && " (default)"}
+                  {o.value === defaultValue && ` (${t("common.default")})`}
                 </option>
               );
             })}
@@ -115,7 +119,14 @@ export function Select<T extends string>({
           items={options.map((o) =>
             o.type === "separator" || o.value !== defaultValue
               ? o
-              : { ...o, label: <>{o.label} (default)</> },
+              : {
+                  ...o,
+                  label: (
+                    <>
+                      {o.label} ({t("common.default")})
+                    </>
+                  ),
+                },
           )}
         >
           <Button

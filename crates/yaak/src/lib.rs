@@ -2,6 +2,7 @@ pub mod error;
 pub mod export;
 pub mod import;
 pub mod plugin_events;
+pub mod post_actions;
 pub mod render;
 pub mod send;
 

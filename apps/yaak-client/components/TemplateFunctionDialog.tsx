@@ -1,4 +1,5 @@
 import type { EditorView } from "@codemirror/view";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type {
   Folder,
   GrpcRequest,
@@ -88,6 +89,7 @@ function InitializedTemplateFunctionDialog({
 }: Omit<Props, "initialTokens"> & {
   initialArgValues: Record<string, string | boolean>;
 }) {
+  const { t } = useTranslation();
   const previewType = ogPreviewType == null ? "live" : ogPreviewType;
   const [showSecretsInPreview, toggleShowSecretsInPreview] = useToggle(false);
   const [argValues, setArgValues] = useState<Record<string, string | boolean>>(initialArgValues);
@@ -170,7 +172,7 @@ function InitializedTemplateFunctionDialog({
         {name === "secure" ? (
           <PlainInput
             required
-            label="Value"
+            label={t("common.value")}
             name="value"
             type="password"
             placeholder="••••••••••••"
@@ -193,14 +195,14 @@ function InitializedTemplateFunctionDialog({
           <div className="w-full grid grid-cols-1 grid-rows-[auto_auto]">
             <HStack space={0.5}>
               <HStack className="text-sm text-text-subtle" space={1.5}>
-                Rendered Preview
+                {t("common.renderedPreview")}
                 {rendered.isLoading && <LoadingIcon size="xs" />}
               </HStack>
               <IconButton
                 size="xs"
                 iconSize="sm"
                 icon={showSecretsInPreview ? "lock" : "lock_open"}
-                title={showSecretsInPreview ? "Show preview" : "Hide preview"}
+                title={showSecretsInPreview ? t("common.showPreview") : t("common.hidePreview")}
                 onClick={toggleShowSecretsInPreview}
                 className={classNames(
                   "ml-auto text-text-subtlest",
@@ -221,10 +223,10 @@ function InitializedTemplateFunctionDialog({
                   </em>
                 ) : dataContainsSecrets && !showSecretsInPreview ? (
                   <span className="italic text-text-subtle">
-                    ------ sensitive values hidden ------
+                    {t("common.sensitiveValuesHidden")}
                   </span>
                 ) : tooLarge ? (
-                  "too large to preview"
+                  t("common.tooLargeToPreview")
                 ) : (
                   rendered.data || <>&nbsp;</>
                 )}
@@ -234,7 +236,7 @@ function InitializedTemplateFunctionDialog({
                   size="xs"
                   icon="refresh"
                   className="text-text-subtle"
-                  title="Refresh preview"
+                  title={t("common.refreshPreview")}
                   spin={rendered.isPending}
                   onClick={() => {
                     setRenderKey(new Date().toISOString());
@@ -249,11 +251,11 @@ function InitializedTemplateFunctionDialog({
         <div className="flex justify-stretch w-full grow gap-2 *:flex-1">
           {templateFunction.data.name === "secure" && (
             <Button variant="border" color="secondary" onClick={setupOrConfigureEncryption}>
-              Reveal Encryption Key
+              {t("workspace.revealEncryptionKey")}
             </Button>
           )}
           <Button type="submit" color="primary">
-            Save
+            {t("common.save")}
           </Button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import type { HttpResponse } from "@yaakapp-internal/models";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { lazy, Suspense } from "react";
 import { useHttpRequestBody } from "../hooks/useHttpRequestBody";
 import { getMimeTypeFromContentType, languageFromContentType } from "../lib/contentType";
@@ -26,6 +27,7 @@ export function RequestBodyViewer({ response }: Props) {
 }
 
 function RequestBodyViewerInner({ response }: Props) {
+  const { t } = useTranslation();
   const { data, isLoading, error } = useHttpRequestBody(response);
 
   if (isLoading) {
@@ -37,11 +39,15 @@ function RequestBodyViewerInner({ response }: Props) {
   }
 
   if (error) {
-    return <EmptyStateText>Error loading request body: {error.message}</EmptyStateText>;
+    return (
+      <EmptyStateText>
+        {t("response.errorLoadingRequestBody", { message: error.message })}
+      </EmptyStateText>
+    );
   }
 
   if (data?.bodyText == null || data.bodyText.length === 0) {
-    return <EmptyStateText>No request body</EmptyStateText>;
+    return <EmptyStateText>{t("response.noRequestBody")}</EmptyStateText>;
   }
 
   const { bodyText, body } = data;

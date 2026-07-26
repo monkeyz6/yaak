@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vp dev --force",
     "build": "vp build",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
@@ -39,6 +40,7 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-os": "^2.3.2",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "@yaakapp-internal/i18n": "*",
     "buffer": "^6.0.3",
     "classnames": "^2.5.1",
     "cm6-graphql": "^0.2.1",

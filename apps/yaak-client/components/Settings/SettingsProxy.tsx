@@ -1,6 +1,7 @@
 import { patchModel, settingsAtom } from "@yaakapp-internal/models";
 import type { ProxySetting } from "@yaakapp-internal/models";
-import { Heading, InlineCode, VStack } from "@yaakapp-internal/ui";
+import { useTranslation } from "@yaakapp-internal/i18n";
+import { Heading, VStack } from "@yaakapp-internal/ui";
 import { useAtomValue } from "jotai";
 import { CommercialUseBanner } from "../CommercialUseBanner";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../core/SettingRow";
 
 export function SettingsProxy() {
+  const { t } = useTranslation();
   const settings = useAtomValue(settingsAtom);
   const proxy = enabledProxyOrDefault(settings.proxy);
 
@@ -28,18 +30,15 @@ export function SettingsProxy() {
   return (
     <VStack space={1.5} className="mb-4">
       <div className="mb-3">
-        <Heading>Proxy</Heading>
-        <p className="text-text-subtle">
-          Configure a proxy server for HTTP requests. Useful for corporate firewalls, debugging
-          traffic, or routing through specific infrastructure.
-        </p>
+        <Heading>{t("settings.proxy")}</Heading>
+        <p className="text-text-subtle">{t("settings.proxyDescription")}</p>
       </div>
-      <CommercialUseBanner source="proxy-settings" title="Using a proxy for work?" />
+      <CommercialUseBanner source="proxy-settings" title={t("settings.usingProxyForWork")} />
       <SettingsList className="space-y-8">
-        <SettingsSection title="Proxy">
+        <SettingsSection title={t("settings.proxy")}>
           <SettingRowSelect
-            title="Proxy"
-            description="Choose how Yaak should discover or use proxy settings."
+            title={t("settings.proxy")}
+            description={t("settings.proxyModeDescription")}
             name="proxy"
             value={settings.proxy?.type ?? "automatic"}
             onChange={async (v) => {
@@ -52,9 +51,9 @@ export function SettingsProxy() {
               }
             }}
             options={[
-              { label: "Automatic proxy detection", value: "automatic" },
-              { label: "Custom proxy configuration", value: "enabled" },
-              { label: "No proxy", value: "disabled" },
+              { label: t("settings.proxyAutomatic"), value: "automatic" },
+              { label: t("settings.proxyCustom"), value: "enabled" },
+              { label: t("settings.proxyNone"), value: "disabled" },
             ]}
             selectClassName="w-64!"
           />
@@ -62,41 +61,33 @@ export function SettingsProxy() {
 
         {settings.proxy?.type === "enabled" && (
           <>
-            <SettingsSection title="Custom Proxy">
+            <SettingsSection title={t("settings.customProxy")}>
               <SettingRowBoolean
                 checked={!settings.proxy.disabled}
-                title="Enable proxy"
-                description="Temporarily disable the proxy without losing the configuration."
+                title={t("settings.enableProxy")}
+                description={t("settings.enableProxyDescription")}
                 onChange={(enabled) => patchProxy({ disabled: !enabled })}
               />
               <SettingRowText
                 name="proxyHttp"
-                title={
-                  <>
-                    Proxy for <InlineCode>http://</InlineCode> traffic
-                  </>
-                }
-                description="Proxy host used for unencrypted HTTP traffic."
+                title={t("settings.httpProxy")}
+                description={t("settings.httpProxyDescription")}
                 value={settings.proxy.http}
                 placeholder="localhost:9090"
                 onChange={(http) => patchProxy({ http })}
               />
               <SettingRowText
                 name="proxyHttps"
-                title={
-                  <>
-                    Proxy for <InlineCode>https://</InlineCode> traffic
-                  </>
-                }
-                description="Proxy host used for HTTPS traffic."
+                title={t("settings.httpsProxy")}
+                description={t("settings.httpsProxyDescription")}
                 value={settings.proxy.https}
                 placeholder="localhost:9090"
                 onChange={(https) => patchProxy({ https })}
               />
               <SettingRowText
                 name="proxyBypass"
-                title="Proxy Bypass"
-                description="Comma-separated list of hosts that should bypass the proxy."
+                title={t("settings.proxyBypass")}
+                description={t("settings.proxyBypassDescription")}
                 value={settings.proxy.bypass}
                 placeholder="127.0.0.1, *.example.com, localhost:3000"
                 inputWidthClassName="w-96!"
@@ -104,11 +95,11 @@ export function SettingsProxy() {
               />
             </SettingsSection>
 
-            <SettingsSection title="Authentication">
+            <SettingsSection title={t("settings.authentication")}>
               <SettingRowBoolean
                 checked={settings.proxy.auth != null}
-                title="Enable authentication"
-                description="Send proxy credentials with proxied requests."
+                title={t("settings.enableAuthentication")}
+                description={t("settings.enableAuthenticationDescription")}
                 onChange={(enabled) =>
                   patchProxy({ auth: enabled ? { user: "", password: "" } : null })
                 }
@@ -119,8 +110,8 @@ export function SettingsProxy() {
                   <SettingRowText
                     required
                     name="proxyUser"
-                    title="User"
-                    description="Username for proxy authentication."
+                    title={t("settings.user")}
+                    description={t("settings.proxyUserDescription")}
                     value={settings.proxy.auth.user}
                     placeholder="myUser"
                     onChange={(user) =>
@@ -137,8 +128,8 @@ export function SettingsProxy() {
                   />
                   <SettingRowText
                     name="proxyPassword"
-                    title="Password"
-                    description="Password for proxy authentication."
+                    title={t("settings.password")}
+                    description={t("settings.proxyPasswordDescription")}
                     value={settings.proxy.auth.password}
                     placeholder="s3cretPassw0rd"
                     type="password"

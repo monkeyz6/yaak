@@ -1,4 +1,5 @@
 import { type } from "@tauri-apps/plugin-os";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { useFonts } from "@yaakapp-internal/fonts";
 import { useLicense } from "@yaakapp-internal/license";
 import type { EditorKeymap, Settings } from "@yaakapp-internal/models";
@@ -39,6 +40,7 @@ const keymaps: { value: EditorKeymap; label: string }[] = [
 ];
 
 export function SettingsInterface() {
+  const { t } = useTranslation();
   const workspace = useAtomValue(activeWorkspaceAtom);
   const settings = useAtomValue(settingsAtom);
   const fonts = useFonts();
@@ -50,14 +52,29 @@ export function SettingsInterface() {
   return (
     <VStack space={1.5} className="mb-4">
       <div className="mb-3">
-        <Heading>Interface</Heading>
-        <p className="text-text-subtle">Tweak settings related to the user interface.</p>
+        <Heading>{t("settings.interface")}</Heading>
+        <p className="text-text-subtle">{t("settings.interfaceDescription")}</p>
       </div>
       <SettingsList className="space-y-8">
-        <SettingsSection title="Workspaces">
+        <SettingsSection title={t("settings.languageSection")}>
           <SettingRowSelect
-            title="Open workspace behavior"
-            description="Choose what happens when opening another workspace."
+            title={t("settings.language")}
+            description={t("settings.languageDescription")}
+            name="language"
+            value={settings.language}
+            onChange={(language) => patchModel(settings, { language })}
+            options={[
+              { label: t("settings.systemLanguage"), value: "system" },
+              { label: t("settings.english"), value: "en" },
+              { label: t("settings.simplifiedChinese"), value: "zh-CN" },
+            ]}
+          />
+        </SettingsSection>
+
+        <SettingsSection title={t("settings.workspaces")}>
+          <SettingRowSelect
+            title={t("settings.openWorkspaceBehavior")}
+            description={t("settings.openWorkspaceDescription")}
             name="switchWorkspaceBehavior"
             value={
               settings.openWorkspaceNewWindow === true
@@ -72,28 +89,28 @@ export function SettingsInterface() {
               else await patchModel(settings, { openWorkspaceNewWindow: null });
             }}
             options={[
-              { label: "Always ask", value: "ask" },
-              { label: "Open in current window", value: "current" },
-              { label: "Open in new window", value: "new" },
+              { label: t("settings.alwaysAsk"), value: "ask" },
+              { label: t("settings.currentWindow"), value: "current" },
+              { label: t("settings.newWindow"), value: "new" },
             ]}
           />
         </SettingsSection>
 
-        <SettingsSection title="Fonts">
+        <SettingsSection title={t("settings.fonts")}>
           <SettingRow
-            title="Interface font"
-            description="Font used for Yaak interface controls."
+            title={t("settings.interfaceFont")}
+            description={t("settings.interfaceFontDescription")}
             controlClassName="gap-1"
           >
             {fonts.data && (
               <SettingSelectControl
                 name="uiFont"
-                label="Interface font"
+                label={t("settings.interfaceFont")}
                 selectClassName="w-72!"
                 value={settings.interfaceFont ?? NULL_FONT_VALUE}
                 defaultValue={NULL_FONT_VALUE}
                 options={[
-                  { label: "System default", value: NULL_FONT_VALUE },
+                  { label: t("settings.systemDefault"), value: NULL_FONT_VALUE },
                   ...fonts.data.uiFonts.map((f) => ({ label: f, value: f })),
                   ...fonts.data.editorFonts.map((f) => ({ label: f, value: f })),
                 ]}
@@ -105,7 +122,7 @@ export function SettingsInterface() {
             )}
             <SettingSelectControl
               name="interfaceFontSize"
-              label="Interface Font Size"
+              label={t("settings.interfaceFontSize")}
               selectClassName="w-20!"
               value={`${settings.interfaceFontSize}`}
               defaultValue="14"
@@ -115,19 +132,19 @@ export function SettingsInterface() {
           </SettingRow>
 
           <SettingRow
-            title="Editor font"
-            description="Font used in request and response editors."
+            title={t("settings.editorFont")}
+            description={t("settings.editorFontDescription")}
             controlClassName="gap-1"
           >
             {fonts.data && (
               <SettingSelectControl
                 name="editorFont"
-                label="Editor font"
+                label={t("settings.editorFont")}
                 selectClassName="w-72!"
                 value={settings.editorFont ?? NULL_FONT_VALUE}
                 defaultValue={NULL_FONT_VALUE}
                 options={[
-                  { label: "System default", value: NULL_FONT_VALUE },
+                  { label: t("settings.systemDefault"), value: NULL_FONT_VALUE },
                   ...fonts.data.editorFonts.map((f) => ({ label: f, value: f })),
                 ]}
                 onChange={async (v) => {
@@ -138,7 +155,7 @@ export function SettingsInterface() {
             )}
             <SettingSelectControl
               name="editorFontSize"
-              label="Editor Font Size"
+              label={t("settings.editorFontSize")}
               selectClassName="w-20!"
               value={`${settings.editorFontSize}`}
               defaultValue="12"
@@ -152,36 +169,38 @@ export function SettingsInterface() {
           </SettingRow>
         </SettingsSection>
 
-        <SettingsSection title="Editor">
+        <SettingsSection title={t("settings.editor")}>
           <ModelSettingRowSelect
             model={settings}
             modelKey="editorKeymap"
-            title="Editor keymap"
-            description="Keyboard shortcut preset used by text editors."
-            options={keymaps}
+            title={t("settings.editorKeymap")}
+            description={t("settings.editorKeymapDescription")}
+            options={keymaps.map((k) =>
+              k.value === "default" ? { ...k, label: t("settings.keymapDefault") } : k,
+            )}
           />
           <ModelSettingRowBoolean
             model={settings}
             modelKey="editorSoftWrap"
-            title="Wrap editor lines"
-            description="Wrap long lines in request and response editors."
+            title={t("settings.wrapLines")}
+            description={t("settings.wrapLinesDescription")}
           />
           <ModelSettingRowBoolean
             model={settings}
             modelKey="coloredMethods"
-            title="Colorize request methods"
-            description="Use method-specific colors for HTTP request methods."
+            title={t("settings.coloredMethods")}
+            description={t("settings.coloredMethodsDescription")}
           />
         </SettingsSection>
 
-        <SettingsSection title="Window">
+        <SettingsSection title={t("settings.window")}>
           <NativeTitlebarSetting settings={settings} />
           {type() !== "macos" && (
             <ModelSettingRowBoolean
               model={settings}
               modelKey="hideWindowControls"
-              title="Hide window controls"
-              description="Hide the close, maximize, and minimize controls on Windows or Linux."
+              title={t("settings.hideWindowControls")}
+              description={t("settings.hideWindowControlsDescription")}
             />
           )}
         </SettingsSection>
@@ -195,19 +214,20 @@ export function SettingsInterface() {
 }
 
 function NativeTitlebarSetting({ settings }: { settings: Settings }) {
+  const { t } = useTranslation();
   const [nativeTitlebar, setNativeTitlebar] = useState(settings.useNativeTitlebar);
 
   return (
     <SettingRow
-      title="Native title bar"
-      description="Use the operating system's standard title bar and window controls."
+      title={t("settings.nativeTitlebar")}
+      description={t("settings.nativeTitlebarDescription")}
       controlClassName="gap-2"
     >
       <Checkbox
         hideLabel
         size="md"
         checked={nativeTitlebar}
-        title="Native title bar"
+        title={t("settings.nativeTitlebar")}
         onChange={setNativeTitlebar}
       />
       {settings.useNativeTitlebar !== nativeTitlebar && (
@@ -219,7 +239,7 @@ function NativeTitlebarSetting({ settings }: { settings: Settings }) {
             await invokeCmd("cmd_restart");
           }}
         >
-          Apply and Restart
+          {t("settings.applyRestart")}
         </Button>
       )}
     </SettingRow>
@@ -227,39 +247,40 @@ function NativeTitlebarSetting({ settings }: { settings: Settings }) {
 }
 
 function LicenseSettings({ settings }: { settings: Settings }) {
+  const { t } = useTranslation();
   const license = useLicense();
   if (license.check.data?.status !== "personal_use") {
     return null;
   }
 
   return (
-    <SettingsSection title="License">
+    <SettingsSection title={t("settings.license")}>
       <SettingRowBoolean
         checked={settings.hideLicenseBadge}
-        title="Hide personal use badge"
-        description="Hide the personal-use badge from the interface."
+        title={t("settings.hideLicenseBadge")}
+        description={t("settings.hideLicenseBadgeDescription")}
         onChange={async (hideLicenseBadge) => {
           if (hideLicenseBadge) {
             const confirmed = await showConfirm({
               id: "hide-license-badge",
-              title: "Confirm Personal Use",
-              confirmText: "Confirm",
+              title: t("settings.confirmPersonalUse"),
+              confirmText: t("common.confirm"),
               description: (
                 <VStack space={3}>
-                  <p>Hey there 👋🏼</p>
+                  <p>{t("settings.licenseGreeting")}</p>
                   <p>
-                    Yaak is free for personal projects and learning.{" "}
-                    <strong>If you’re using Yaak at work, a license is required.</strong>
+                    {t("settings.licensePersonalFree")}{" "}
+                    <strong>{t("settings.licenseWorkRequired")}</strong>
                   </p>
                   <p>
-                    Licenses help keep Yaak independent and sustainable.{" "}
+                    {t("settings.licenseSustain")}{" "}
                     <Link href={pricingUrl("app.license.badge-hide-confirm")}>
-                      Purchase a License →
+                      {t("settings.purchaseLicenseLink")}
                     </Link>
                   </p>
                 </VStack>
               ),
-              requireTyping: "Personal Use",
+              requireTyping: t("settings.personalUse"),
               color: "info",
             });
             if (!confirmed) {

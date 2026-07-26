@@ -208,6 +208,7 @@ export type HttpRequest = {
    * URL parameters used for both path placeholders (`:id`) and query string entries.
    */
   urlParameters: Array<HttpUrlParameter>;
+  postResponseActions: Array<PostResponseAction>;
   settingSendCookies: InheritedBoolSetting;
   settingStoreCookies: InheritedBoolSetting;
   settingValidateCertificates: InheritedBoolSetting;
@@ -267,6 +268,15 @@ export type HttpResponseEventData =
       source_name?: string;
     }
   | { type: "info"; message: string }
+  | {
+      type: "post_response_action";
+      action_id?: string;
+      variable_name: string;
+      environment_id: string;
+      environment_name: string;
+      status: string;
+      message: string;
+    }
   | {
       type: "redirect";
       url: string;
@@ -343,6 +353,18 @@ export type Plugin = {
 
 export type PluginSource = "bundled" | "filesystem" | "registry";
 
+export type PostResponseAction = {
+  id?: string;
+  enabled?: boolean;
+  type: "set_environment_variable";
+  jsonPath: string;
+  variableName: string;
+  /**
+   * Wrap the extracted value in the secure() template function before storing it
+   */
+  secure?: boolean;
+};
+
 export type ProxySetting =
   | {
       type: "enabled";
@@ -373,12 +395,14 @@ export type Settings = {
   interfaceFont: string | null;
   interfaceFontSize: number;
   interfaceScale: number;
+  language: "system" | "en" | "zh-CN";
   openWorkspaceNewWindow: boolean | null;
   proxy: ProxySetting | null;
   themeDark: string;
   themeLight: string;
   updateChannel: string;
   hideLicenseBadge: boolean;
+  promptFeedback: boolean;
   autoupdate: boolean;
   autoDownloadUpdates: boolean;
   checkNotifications: boolean;
@@ -429,7 +453,14 @@ export type WebsocketEvent = {
 };
 
 export type WebsocketEventType =
-  "binary" | "close" | "error" | "frame" | "open" | "ping" | "pong" | "text";
+  | "binary"
+  | "close"
+  | "error"
+  | "frame"
+  | "open"
+  | "ping"
+  | "pong"
+  | "text";
 
 export type WebsocketRequest = {
   model: "websocket_request";

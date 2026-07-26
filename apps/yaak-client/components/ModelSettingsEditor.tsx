@@ -8,6 +8,7 @@ import type {
   Workspace,
 } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { useModelAncestors } from "../hooks/useModelAncestors";
 import {
   modelSupportsSetting,
@@ -38,29 +39,11 @@ interface Props {
   model: ModelWithSettings;
 }
 
-type ModelWithSettings =
-  | Workspace
-  | Folder
-  | HttpRequest
-  | WebsocketRequest
-  | GrpcRequest;
+type ModelWithSettings = Workspace | Folder | HttpRequest | WebsocketRequest | GrpcRequest;
 type ModelWithHttpSettings = Workspace | Folder | HttpRequest;
-type ModelWithTlsSettings =
-  | Workspace
-  | Folder
-  | HttpRequest
-  | WebsocketRequest
-  | GrpcRequest;
-type ModelWithCookieSettings =
-  | Workspace
-  | Folder
-  | HttpRequest
-  | WebsocketRequest;
-type ModelWithMessageSizeSettings =
-  | Workspace
-  | Folder
-  | WebsocketRequest
-  | GrpcRequest;
+type ModelWithTlsSettings = Workspace | Folder | HttpRequest | WebsocketRequest | GrpcRequest;
+type ModelWithCookieSettings = Workspace | Folder | HttpRequest | WebsocketRequest;
+type ModelWithMessageSizeSettings = Workspace | Folder | WebsocketRequest | GrpcRequest;
 type BooleanSetting = boolean | InheritedBoolSetting;
 type IntegerSetting = number | InheritedIntSetting;
 type CookieSettingsPatch = {
@@ -78,10 +61,8 @@ type MessageSizeSettingsPatch = {
   settingRequestMessageSize?: ModelWithMessageSizeSettings["settingRequestMessageSize"];
 };
 
-export function ModelSettingsEditor({
-  model,
-  showSectionTitles = false,
-}: Props) {
+export function ModelSettingsEditor({ model, showSectionTitles = false }: Props) {
+  const { t } = useTranslation();
   const ancestors = useModelAncestors(model);
   const supportsHttpSettings = modelSupportsHttpSettings(model);
   const supportsCookieSettings = modelSupportsCookieSettings(model);
@@ -91,7 +72,7 @@ export function ModelSettingsEditor({
   return (
     <SettingsList className="space-y-8">
       {supportsTlsSettings && (
-        <SettingsSection title={showSectionTitles ? "Requests" : null}>
+        <SettingsSection title={showSectionTitles ? t("requestSettings.requests") : null}>
           {supportsHttpSettings && (
             <IntegerSettingRow
               settingDefinition={SETTING_REQUEST_TIMEOUT}
@@ -158,7 +139,7 @@ export function ModelSettingsEditor({
       )}
       {supportsCookieSettings && (
         <SettingsSection
-          title={supportsTlsSettings || showSectionTitles ? "Cookies" : null}
+          title={supportsTlsSettings || showSectionTitles ? t("requestSettings.cookies") : null}
         >
           <BooleanSettingRow
             settingDefinition={SETTING_SEND_COOKIES}
@@ -211,15 +192,11 @@ export function countOverriddenSettings(model: ModelWithSettings) {
     settings.push(model.settingRequestMessageSize);
   }
 
-  return settings.filter(
-    (setting) => isInheritedSetting(setting) && setting.enabled === true,
-  ).length;
+  return settings.filter((setting) => isInheritedSetting(setting) && setting.enabled === true)
+    .length;
 }
 
-function patchCookieSettings(
-  model: ModelWithCookieSettings,
-  patch: Partial<CookieSettingsPatch>,
-) {
+function patchCookieSettings(model: ModelWithCookieSettings, patch: Partial<CookieSettingsPatch>) {
   switch (model.model) {
     case "workspace":
       return patchModel(model, patch as Partial<Workspace>);
@@ -232,10 +209,7 @@ function patchCookieSettings(
   }
 }
 
-function patchHttpSettings(
-  model: ModelWithHttpSettings,
-  patch: Partial<HttpSettingsPatch>,
-) {
+function patchHttpSettings(model: ModelWithHttpSettings, patch: Partial<HttpSettingsPatch>) {
   switch (model.model) {
     case "workspace":
       return patchModel(model, patch as Partial<Workspace>);
@@ -246,10 +220,7 @@ function patchHttpSettings(
   }
 }
 
-function patchTlsSettings(
-  model: ModelWithTlsSettings,
-  patch: Partial<TlsSettingsPatch>,
-) {
+function patchTlsSettings(model: ModelWithTlsSettings, patch: Partial<TlsSettingsPatch>) {
   switch (model.model) {
     case "workspace":
       return patchModel(model, patch as Partial<Workspace>);
@@ -280,21 +251,15 @@ function patchMessageSizeSettings(
   }
 }
 
-function modelSupportsHttpSettings(
-  model: ModelWithSettings,
-): model is ModelWithHttpSettings {
+function modelSupportsHttpSettings(model: ModelWithSettings): model is ModelWithHttpSettings {
   return modelSupportsSetting(model, SETTING_REQUEST_TIMEOUT);
 }
 
-function modelSupportsCookieSettings(
-  model: ModelWithSettings,
-): model is ModelWithCookieSettings {
+function modelSupportsCookieSettings(model: ModelWithSettings): model is ModelWithCookieSettings {
   return modelSupportsSetting(model, SETTING_SEND_COOKIES);
 }
 
-function modelSupportsTlsSettings(
-  model: ModelWithSettings,
-): model is ModelWithTlsSettings {
+function modelSupportsTlsSettings(model: ModelWithSettings): model is ModelWithTlsSettings {
   return modelSupportsSetting(model, SETTING_VALIDATE_CERTIFICATES);
 }
 
@@ -315,20 +280,19 @@ function BooleanSettingRow({
   settingDefinition: RequestSettingDefinition;
   onChange: (setting: BooleanSetting) => void;
 }) {
+  const { t } = useTranslation();
+  const title = t(settingDefinition.titleKey);
+  const description = t(settingDefinition.descriptionKey);
   const inherited = isInheritedSetting(setting);
   const overridden = inherited ? setting.enabled === true : false;
-  const value = inherited
-    ? overridden
-      ? setting.value
-      : inheritedValue
-    : setting;
+  const value = inherited ? (overridden ? setting.value : inheritedValue) : setting;
 
   if (!inherited) {
     return (
       <SettingRowBoolean
         checked={value}
-        title={settingDefinition.title}
-        description={settingDefinition.description}
+        title={title}
+        description={description}
         onChange={(value) => onChange(value)}
       />
     );
@@ -336,15 +300,15 @@ function BooleanSettingRow({
 
   return (
     <SettingOverrideRow
-      title={settingDefinition.title}
-      description={settingDefinition.description}
+      title={title}
+      description={description}
       overridden={overridden}
       onResetOverride={() => onChange({ ...setting, enabled: false })}
     >
       <Checkbox
         hideLabel
         size="md"
-        title={settingDefinition.title}
+        title={title}
         checked={value}
         onChange={(value) => onChange({ ...setting, enabled: true, value })}
       />
@@ -363,23 +327,19 @@ function IntegerSettingRow({
   settingDefinition: RequestSettingDefinition<"settingRequestTimeout">;
   onChange: (setting: IntegerSetting) => void;
 }) {
+  const { t } = useTranslation();
+  const title = t(settingDefinition.titleKey);
+  const description = t(settingDefinition.descriptionKey);
   const inherited = isInheritedSetting(setting);
   const overridden = inherited ? setting.enabled === true : false;
-  const value = inherited
-    ? overridden
-      ? setting.value
-      : inheritedValue
-    : setting;
+  const value = inherited ? (overridden ? setting.value : inheritedValue) : setting;
 
   if (!inherited) {
     return (
-      <SettingRow
-        title={settingDefinition.title}
-        description={settingDefinition.description}
-      >
+      <SettingRow title={title} description={description}>
         <NumberUnitInput
           name={settingDefinition.modelKey}
-          label={settingDefinition.title}
+          label={title}
           unit="ms"
           value={`${value}`}
           placeholder={`${settingDefinition.defaultValue}`}
@@ -392,14 +352,14 @@ function IntegerSettingRow({
 
   return (
     <SettingOverrideRow
-      title={settingDefinition.title}
-      description={settingDefinition.description}
+      title={title}
+      description={description}
       overridden={overridden}
       onResetOverride={() => onChange({ ...setting, enabled: false })}
     >
       <NumberUnitInput
         name={settingDefinition.modelKey}
-        label={settingDefinition.title}
+        label={title}
         unit="ms"
         value={`${value}`}
         placeholder={`${settingDefinition.defaultValue}`}
@@ -427,25 +387,21 @@ function MessageSizeSettingRow({
   settingDefinition: RequestSettingDefinition<"settingRequestMessageSize">;
   onChange: (setting: IntegerSetting) => void;
 }) {
+  const { t } = useTranslation();
+  const title = t(settingDefinition.titleKey);
+  const description = t(settingDefinition.descriptionKey);
   const inherited = isInheritedSetting(setting);
   const overridden = inherited ? setting.enabled === true : false;
-  const value = inherited
-    ? overridden
-      ? setting.value
-      : inheritedValue
-    : setting;
+  const value = inherited ? (overridden ? setting.value : inheritedValue) : setting;
   const displayValue = formatMegabytes(value);
   const placeholder = "0";
 
   if (!inherited) {
     return (
-      <SettingRow
-        title={settingDefinition.title}
-        description={settingDefinition.description}
-      >
+      <SettingRow title={title} description={description}>
         <MessageSizeInput
           name={settingDefinition.modelKey}
-          label={settingDefinition.title}
+          label={title}
           value={displayValue}
           placeholder={placeholder}
           onChange={(value) => onChange(parseMegabytes(value))}
@@ -456,14 +412,14 @@ function MessageSizeSettingRow({
 
   return (
     <SettingOverrideRow
-      title={settingDefinition.title}
-      description={settingDefinition.description}
+      title={title}
+      description={description}
       overridden={overridden}
       onResetOverride={() => onChange({ ...setting, enabled: false })}
     >
       <MessageSizeInput
         name={settingDefinition.modelKey}
-        label={settingDefinition.title}
+        label={title}
         value={displayValue}
         placeholder={placeholder}
         onChange={(value) =>
@@ -603,9 +559,7 @@ type BooleanWorkspaceSettingKey = Exclude<
 
 function formatMegabytes(bytes: number) {
   const megabytes = bytes / BYTES_PER_MB;
-  return Number.isInteger(megabytes)
-    ? `${megabytes}`
-    : megabytes.toFixed(3).replace(/\.?0+$/, "");
+  return Number.isInteger(megabytes) ? `${megabytes}` : megabytes.toFixed(3).replace(/\.?0+$/, "");
 }
 
 function parseMegabytes(value: string) {
@@ -626,9 +580,5 @@ function isValidInteger(value: string) {
 function isValidMegabytes(value: string) {
   if (value === "") return true;
   const megabytes = Number(value);
-  return (
-    Number.isFinite(megabytes) &&
-    megabytes >= 0 &&
-    megabytes <= MAX_MESSAGE_SIZE_MB
-  );
+  return Number.isFinite(megabytes) && megabytes >= 0 && megabytes <= MAX_MESSAGE_SIZE_MB;
 }

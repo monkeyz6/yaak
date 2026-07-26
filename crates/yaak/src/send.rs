@@ -1,3 +1,6 @@
+use crate::post_actions::{
+    MAX_POST_ACTION_BODY_BYTES, PostActionBody, PostActionOutcome, execute_post_response_actions,
+};
 use crate::render::render_http_request;
 use async_trait::async_trait;
 use log::warn;
@@ -26,7 +29,7 @@ use yaak_models::blob_manager::{BlobManager, BodyChunk};
 use yaak_models::models::{
     ClientCertificate, CookieJar, DnsOverride, Environment, HttpRequest, HttpResponse,
     HttpResponseEvent, HttpResponseHeader, HttpResponseState, ProxySetting, ProxySettingAuth,
-    ResolvedSetting,
+    ResolvedSetting, HttpResponseEventData,
 };
 use yaak_models::query_manager::QueryManager;
 use yaak_models::util::{UpdateSource, generate_prefixed_id};
@@ -260,6 +263,8 @@ pub struct SendHttpRequestByIdParams<'a, T: TemplateCallback> {
     pub cancelled_rx: Option<watch::Receiver<bool>>,
     pub prepare_sendable_request: Option<&'a dyn PrepareSendableRequest>,
     pub executor: Option<&'a dyn SendRequestExecutor>,
+    /// Used to encrypt values extracted by post-response actions marked as secure
+    pub encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 pub struct SendHttpRequestParams<'a, T: TemplateCallback> {
@@ -279,6 +284,8 @@ pub struct SendHttpRequestParams<'a, T: TemplateCallback> {
     pub existing_response: Option<HttpResponse>,
     pub prepare_sendable_request: Option<&'a dyn PrepareSendableRequest>,
     pub executor: Option<&'a dyn SendRequestExecutor>,
+    /// Used to encrypt values extracted by post-response actions marked as secure
+    pub encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 pub struct SendHttpRequestWithPluginsParams<'a> {
@@ -320,6 +327,7 @@ pub struct SendHttpRequestResult {
     pub rendered_request: HttpRequest,
     pub response: HttpResponse,
     pub response_body: Vec<u8>,
+    pub post_action_outcomes: Vec<PostActionOutcome>,
 }
 
 pub struct HttpSendRuntimeConfig {
@@ -429,6 +437,7 @@ pub async fn send_http_request_with_plugins(
         existing_response: params.existing_response,
         prepare_sendable_request: Some(&auth_hook),
         executor: executor.as_ref().map(|e| e as &dyn SendRequestExecutor),
+        encryption_manager: Some(params.encryption_manager),
     })
     .await
 }
@@ -460,6 +469,7 @@ pub async fn send_http_request_by_id<T: TemplateCallback>(
         prepare_sendable_request: params.prepare_sendable_request,
         executor: params.executor,
         auth_context_id: Some(auth_context_id),
+        encryption_manager: params.encryption_manager,
     })
     .await
 }
@@ -731,6 +741,7 @@ pub async fn send_http_request<T: TemplateCallback>(
     let mut read_buf = vec![0; 64 * 1024];
     let collect_response_body = !persist_response && params.emit_response_body_chunks_to.is_none();
     let mut body_read_error = None;
+    let mut response_cancelled = false;
     let mut written_bytes: usize = 0;
     let mut last_progress_update = started_at;
     let mut cancelled_rx = params.cancelled_rx.clone();
@@ -738,12 +749,14 @@ pub async fn send_http_request<T: TemplateCallback>(
     loop {
         let read_result = if let Some(cancelled_rx) = cancelled_rx.as_mut() {
             if *cancelled_rx.borrow() {
+                response_cancelled = true;
                 break;
             }
 
             tokio::select! {
                 biased;
                 _ = cancelled_rx.changed() => {
+                    response_cancelled = true;
                     None
                 }
                 result = body_stream.read(&mut read_buf) => {
@@ -917,7 +930,70 @@ pub async fn send_http_request<T: TemplateCallback>(
         warn!("Failed to join response event task: {}", join_err);
     }
 
-    Ok(SendHttpRequestResult { rendered_request, response, response_body })
+    let mut post_action_outcomes = Vec::new();
+    let has_post_actions = persist_response
+        && !response_cancelled
+        && params.request.post_response_actions.iter().any(|action| action.enabled);
+    if has_post_actions {
+        let is_event_stream = response.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("content-type")
+                && header.value.to_ascii_lowercase().contains("text/event-stream")
+        });
+
+        let body_bytes;
+        let body = if is_event_stream {
+            PostActionBody::EventStream
+        } else {
+            match tokio::fs::metadata(&body_path).await.map(|m| m.len()) {
+                Ok(len) if len > MAX_POST_ACTION_BODY_BYTES => {
+                    PostActionBody::TooLarge { limit: MAX_POST_ACTION_BODY_BYTES }
+                }
+                _ => match tokio::fs::read(&body_path).await {
+                    Ok(bytes) => {
+                        body_bytes = bytes;
+                        PostActionBody::Json(&body_bytes)
+                    }
+                    Err(err) => PostActionBody::Unreadable(err.to_string()),
+                },
+            }
+        };
+
+        post_action_outcomes = execute_post_response_actions(
+            params.query_manager,
+            &params.request,
+            params.environment_id,
+            response.status,
+            body,
+            params.encryption_manager.as_deref(),
+            &params.update_source,
+        );
+
+        let db = params.query_manager.connect();
+        for outcome in &post_action_outcomes {
+            let event = HttpResponseEvent::new(
+                &response.id,
+                &response.workspace_id,
+                HttpResponseEventData::PostResponseAction {
+                    action_id: outcome.action_id.clone(),
+                    variable_name: outcome.variable_name.clone(),
+                    environment_id: outcome.environment_id.clone(),
+                    environment_name: outcome.environment_name.clone(),
+                    status: outcome.status.to_string(),
+                    message: outcome.message.clone(),
+                },
+            );
+            if let Err(err) = db.upsert_http_response_event(&event, &params.update_source) {
+                warn!("Failed to persist post-response action event: {err}");
+            }
+        }
+    }
+
+    Ok(SendHttpRequestResult {
+        rendered_request,
+        response,
+        response_body,
+        post_action_outcomes,
+    })
 }
 
 fn persist_request_body_bytes(
@@ -1187,4 +1263,166 @@ fn u64_to_i32(value: u64) -> i32 {
 
 fn u128_to_i32(value: u128) -> i32 {
     if value > i32::MAX as u128 { i32::MAX } else { value as i32 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap, VecDeque};
+    use std::io::Cursor;
+    use std::sync::Mutex;
+    use yaak_http::decompress::ContentEncoding;
+    use yaak_models::init_in_memory;
+    use yaak_models::models::{PostResponseAction, Workspace};
+    use yaak_templates::error::Result as TemplateResult;
+
+    struct EmptyTemplateCallback;
+
+    impl TemplateCallback for EmptyTemplateCallback {
+        async fn run(
+            &self,
+            _fn_name: &str,
+            _args: HashMap<String, serde_json::Value>,
+        ) -> TemplateResult<String> {
+            unreachable!("The integration test does not use template functions")
+        }
+
+        fn transform_arg(
+            &self,
+            _fn_name: &str,
+            _arg_name: &str,
+            arg_value: &str,
+        ) -> TemplateResult<String> {
+            Ok(arg_value.to_string())
+        }
+    }
+
+    struct MockExecutor {
+        response_bodies: Mutex<VecDeque<Vec<u8>>>,
+        requested_urls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl SendRequestExecutor for MockExecutor {
+        async fn send(
+            &self,
+            sendable_request: SendableHttpRequest,
+            _event_tx: mpsc::Sender<SenderHttpResponseEvent>,
+            _cookie_behavior: CookieBehavior,
+        ) -> yaak_http::error::Result<yaak_http::sender::HttpResponse> {
+            self.requested_urls.lock().unwrap().push(sendable_request.url.clone());
+            let body = self
+                .response_bodies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("Missing mock response body");
+            Ok(yaak_http::sender::HttpResponse::new(
+                200,
+                Some("OK".to_string()),
+                vec![("content-type".to_string(), "application/json".to_string())],
+                Vec::new(),
+                Some(body.len() as u64),
+                sendable_request.url,
+                None,
+                Some("HTTP/1.1".to_string()),
+                Box::pin(Cursor::new(body)),
+                ContentEncoding::Identity,
+            ))
+        }
+    }
+
+    #[test]
+    fn post_action_value_is_available_to_the_next_request() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (query_manager, blob_manager, _rx) = init_in_memory().unwrap();
+                let workspace = query_manager
+                    .connect()
+                    .upsert_workspace(
+                        &Workspace { name: "Test".to_string(), ..Default::default() },
+                        &UpdateSource::Background,
+                    )
+                    .unwrap();
+                let first_request = query_manager
+                    .connect()
+                    .upsert_http_request(
+                        &HttpRequest {
+                            workspace_id: workspace.id.clone(),
+                            name: "Get token".to_string(),
+                            method: "GET".to_string(),
+                            url: "https://example.test/token".to_string(),
+                            post_response_actions: vec![PostResponseAction {
+                                enabled: true,
+                                action_type: "set_environment_variable".to_string(),
+                                json_path: "$.token".to_string(),
+                                variable_name: "ACCESS_TOKEN".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                        &UpdateSource::Background,
+                    )
+                    .unwrap();
+                let second_request = query_manager
+                    .connect()
+                    .upsert_http_request(
+                        &HttpRequest {
+                            workspace_id: workspace.id.clone(),
+                            name: "Use token".to_string(),
+                            method: "GET".to_string(),
+                            url: "https://example.test/users/${[ ACCESS_TOKEN ]}".to_string(),
+                            body: BTreeMap::new(),
+                            ..Default::default()
+                        },
+                        &UpdateSource::Background,
+                    )
+                    .unwrap();
+                let executor = MockExecutor {
+                    response_bodies: Mutex::new(VecDeque::from([
+                        br#"{"token":"token-from-response"}"#.to_vec(),
+                        br#"{}"#.to_vec(),
+                    ])),
+                    requested_urls: Mutex::new(Vec::new()),
+                };
+                let response_dir = tempfile::tempdir().unwrap();
+                let callback = EmptyTemplateCallback;
+
+                let send = |request: HttpRequest| SendHttpRequestParams {
+                    query_manager: &query_manager,
+                    blob_manager: &blob_manager,
+                    request,
+                    environment_id: None,
+                    template_callback: &callback,
+                    send_options: Some(SendableHttpRequestOptions::default()),
+                    update_source: UpdateSource::Background,
+                    cookie_jar_id: None,
+                    response_dir: response_dir.path(),
+                    emit_events_to: None,
+                    emit_response_body_chunks_to: None,
+                    cancelled_rx: None,
+                    auth_context_id: None,
+                    existing_response: None,
+                    prepare_sendable_request: None,
+                    executor: Some(&executor),
+                    encryption_manager: None,
+                };
+
+                let first_result = send_http_request(send(first_request)).await.unwrap();
+                assert_eq!(first_result.post_action_outcomes.len(), 1);
+                assert_eq!(first_result.post_action_outcomes[0].status, "success");
+
+                send_http_request(send(second_request)).await.unwrap();
+                assert_eq!(
+                    executor.requested_urls.lock().unwrap().as_slice(),
+                    [
+                        "https://example.test/token",
+                        "https://example.test/users/token-from-response",
+                    ]
+                );
+            });
+    }
 }

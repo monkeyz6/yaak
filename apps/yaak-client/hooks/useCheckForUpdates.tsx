@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { i18n } from "@yaakapp-internal/i18n";
 import { InlineCode } from "@yaakapp-internal/ui";
 import { showAlert } from "../lib/alert";
 import { appInfo } from "../lib/appInfo";
@@ -13,10 +14,10 @@ export function useCheckForUpdates() {
       if (!hasUpdate) {
         showAlert({
           id: "no-updates",
-          title: "No Update Available",
+          title: i18n.t("settings.noUpdateAvailable"),
           body: (
             <>
-              You are currently on the latest version <InlineCode>{appInfo.version}</InlineCode>
+              {i18n.t("settings.onLatestVersion")} <InlineCode>{appInfo.version}</InlineCode>
             </>
           ),
         });

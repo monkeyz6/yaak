@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpRequest } from "@yaakapp-internal/models";
 
 import { useAtom } from "jotai";
@@ -35,6 +36,7 @@ export function GraphQLEditor(props: Props) {
 }
 
 function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProps }: Props) {
+  const { t } = useTranslation();
   const [autoIntrospectDisabled, setAutoIntrospectDisabled] = useLocalStorage<
     Record<string, boolean>
   >("graphQLAutoIntrospectDisabled", {});
@@ -116,13 +118,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
       onChange(newBody);
       return newBody;
     });
-  }, [
-    currentBody.operationName,
-    onChange,
-    operationNames,
-    parsedOperationNames,
-    setCurrentBody,
-  ]);
+  }, [currentBody.operationName, onChange, operationNames, parsedOperationNames, setCurrentBody]);
 
   const actions = useMemo<EditorProps["actions"]>(
     () => [
@@ -131,23 +127,27 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
           <RadioDropdown
             value={currentBody.operationName ?? operationNames[0] ?? OPERATION_NAME_NOT_SPECIFIED}
             onChange={handleChangeOperationName}
-            items={[
-              { type: "separator", label: "Operation Name" },
-              {
-                label: <span className="text-text-subtle italic">Not specified</span>,
-                value: OPERATION_NAME_NOT_SPECIFIED,
-              },
-              ...operationNames.map((operationName) => ({
-                label: operationName,
-                value: operationName,
-              })),
-            ] satisfies RadioDropdownItem<string>[]}
+            items={
+              [
+                { type: "separator", label: t("graphql.operationName") },
+                {
+                  label: (
+                    <span className="text-text-subtle italic">{t("graphql.notSpecified")}</span>
+                  ),
+                  value: OPERATION_NAME_NOT_SPECIFIED,
+                },
+                ...operationNames.map((operationName) => ({
+                  label: operationName,
+                  value: operationName,
+                })),
+              ] satisfies RadioDropdownItem<string>[]
+            }
           >
-            <Button size="sm" variant="border" title="Select Operation" forDropdown>
+            <Button size="sm" variant="border" title={t("graphql.selectOperation")} forDropdown>
               {currentBody.operationName === OPERATION_NAME_NOT_SPECIFIED ? (
-                <span className="text-text-subtle italic">Not specified</span>
+                <span className="text-text-subtle italic">{t("graphql.notSpecified")}</span>
               ) : (
-                currentBody.operationName ?? operationNames[0]
+                (currentBody.operationName ?? operationNames[0])
               )}
             </Button>
           </RadioDropdown>
@@ -160,7 +160,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
               ...((schema != null
                 ? [
                     {
-                      label: "Clear",
+                      label: t("graphql.clearSchema"),
                       onSelect: clear,
                       color: "danger",
                       leftSlot: <Icon icon="trash" />,
@@ -172,14 +172,14 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                 hidden: !error,
                 label: (
                   <Banner color="danger">
-                    <p className="mb-1">Schema introspection failed</p>
+                    <p className="mb-1">{t("graphql.schemaIntrospectionFailed")}</p>
                     <Button
                       size="xs"
                       color="danger"
                       variant="border"
                       onClick={() => {
                         showDialog({
-                          title: "Introspection Failed",
+                          title: t("graphql.introspectionFailed"),
                           size: "sm",
                           id: "introspection-failed",
                           render: ({ hide }) => (
@@ -195,7 +195,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                                   color="primary"
                                   size="sm"
                                 >
-                                  Retry Request
+                                  {t("graphql.retryRequest")}
                                 </Button>
                               </div>
                             </>
@@ -203,7 +203,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                         });
                       }}
                     >
-                      View Error
+                      {t("graphql.viewError")}
                     </Button>
                   </Banner>
                 ),
@@ -211,7 +211,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
               },
               {
                 hidden: schema == null,
-                label: `${isDocOpen ? "Hide" : "Show"} Documentation`,
+                label: isDocOpen ? t("graphql.hideDocumentation") : t("graphql.showDocumentation"),
                 leftSlot: <Icon icon="book_open_text" />,
                 onSelect: () => {
                   setGraphqlDocStateAtomValue((v) => ({
@@ -221,14 +221,14 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                 },
               },
               {
-                label: "Introspect Schema",
+                label: t("graphql.introspectSchema"),
                 leftSlot: <Icon icon="refresh" spin={isLoading} />,
                 keepOpenOnSelect: true,
                 onSelect: refetch,
               },
-              { type: "separator", label: "Setting" },
+              { type: "separator", label: t("graphql.settingSection") },
               {
-                label: "Automatic Introspection",
+                label: t("graphql.automaticIntrospection"),
                 keepOpenOnSelect: true,
                 onSelect: () => {
                   setAutoIntrospectDisabled({
@@ -251,12 +251,12 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
             <Button
               size="sm"
               variant="border"
-              title="Refetch Schema"
+              title={t("graphql.refetchSchema")}
               isLoading={isLoading}
               color={error ? "danger" : "default"}
               forDropdown
             >
-              {error ? "Introspection Failed" : schema ? "Schema" : "No Schema"}
+              {error ? t("graphql.introspectionFailed") : schema ? "Schema" : t("graphql.noSchema")}
             </Button>
           </Dropdown>
         )}
@@ -277,6 +277,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
       setGraphqlDocStateAtomValue,
       request.id,
       setAutoIntrospectDisabled,
+      t,
     ],
   );
 
@@ -296,7 +297,7 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
       />
       <div className="grid grid-rows-[auto_minmax(0,1fr)] grid-cols-1 min-h-20">
         <Separator dashed className="pb-1">
-          Variables
+          {t("graphql.variables")}
         </Separator>
         <Editor
           language="json"

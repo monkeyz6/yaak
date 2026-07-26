@@ -1,3 +1,4 @@
+import { i18n } from "@yaakapp-internal/i18n";
 import type { AnyModel } from "@yaakapp-internal/models";
 import { patchModel } from "@yaakapp-internal/models";
 import { InlineCode } from "@yaakapp-internal/ui";
@@ -10,20 +11,20 @@ export async function renameModelWithPrompt(model: Extract<AnyModel, { name: str
 
   const name = await showPrompt({
     id: "rename-request",
-    title: "Rename Request",
+    title: i18n.t("navigation.renameRequest"),
     required: false,
     description:
       model.name === "" ? (
-        "Enter a new name"
+        i18n.t("common.enterNewName")
       ) : (
         <>
-          Enter a new name for <InlineCode>{model.name}</InlineCode>
+          {i18n.t("common.enterNewNameFor")} <InlineCode>{model.name}</InlineCode>
         </>
       ),
-    label: "Name",
-    placeholder: "New Name",
+    label: i18n.t("common.name"),
+    placeholder: i18n.t("common.newNamePlaceholder"),
     defaultValue: model.name,
-    confirmText: "Save",
+    confirmText: i18n.t("common.save"),
   });
 
   if (name == null) return;

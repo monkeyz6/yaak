@@ -1,4 +1,5 @@
 import { clear, readText } from "@tauri-apps/plugin-clipboard-manager";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import * as m from "motion/react-m";
 import { useEffect, useState } from "react";
 import { useImportCurl } from "../hooks/useImportCurl";
@@ -7,6 +8,7 @@ import { Button } from "./core/Button";
 import { Icon } from "@yaakapp-internal/ui";
 
 export function ImportCurlButton() {
+  const { t } = useTranslation();
   const focused = useWindowFocus();
   const [clipboardText, setClipboardText] = useState("");
 
@@ -35,7 +37,7 @@ export function ImportCurlButton() {
         className="rounded-full"
         rightSlot={<Icon icon="import" size="sm" />}
         isLoading={isLoading}
-        title="Import Curl command from clipboard"
+        title={t("importExport.importCurlFromClipboard")}
         onClick={async () => {
           setIsLoading(true);
           try {
@@ -49,7 +51,7 @@ export function ImportCurlButton() {
           }
         }}
       >
-        Import Curl
+        {t("importExport.importCurl")}
       </Button>
     </m.div>
   );

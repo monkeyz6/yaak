@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { HStack, VStack } from "@yaakapp-internal/ui";
 import { useState } from "react";
 import { Button } from "../core/Button";
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function BranchSelectionDialog({ branches, onCancel, onSelect, selectText }: Props) {
+  const { t } = useTranslation();
   const [branch, setBranch] = useState<string>("__NONE__");
   return (
     <VStack
@@ -25,14 +27,14 @@ export function BranchSelectionDialog({ branches, onCancel, onSelect, selectText
       <Select
         name="branch"
         hideLabel
-        label="Branch"
+        label={t("git.branch")}
         value={branch}
         options={branches.map((b) => ({ label: b, value: b }))}
         onChange={setBranch}
       />
       <HStack space={2} justifyContent="end">
         <Button onClick={onCancel} variant="border" color="secondary">
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button type="submit" color="primary">
           {selectText}

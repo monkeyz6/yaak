@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import type { Folder, HttpRequest } from "@yaakapp-internal/models";
 import { foldersAtom, httpRequestsAtom } from "@yaakapp-internal/models";
 import type {
@@ -337,6 +338,7 @@ function EditorArg({
   autocompleteVariables: boolean;
   stateKey: string;
 }) {
+  const { t } = useTranslation();
   const id = `input-${arg.name}`;
 
   // Read-only editor force refresh for every defaultValue change
@@ -386,12 +388,12 @@ function EditorArg({
                 size="sm"
                 className="my-0.5 opacity-60 group-hover:opacity-100"
                 icon="expand"
-                title="Pop out to large editor"
+                title={t("common.popOutEditor")}
                 onClick={() => {
                   showDialog({
                     id: "id",
                     size: "full",
-                    title: arg.readOnly ? "View Value" : "Edit Value",
+                    title: arg.readOnly ? t("common.viewValue") : t("common.editValue"),
                     className: "max-w-200! max-h-240!",
                     description: arg.label && (
                       <Label
@@ -493,6 +495,7 @@ function HttpRequestArg({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   const folders = useAtomValue(foldersAtom);
   const httpRequests = useAtomValue(httpRequestsAtom);
   const activeHttpRequest = useActiveRequest("http_request");
@@ -515,7 +518,7 @@ function HttpRequestArg({
         return {
           label:
             buildRequestBreadcrumbs(r, folders).join(" / ") +
-            (r.id === activeHttpRequest?.id ? " (current)" : ""),
+            (r.id === activeHttpRequest?.id ? ` ${t("request.currentSuffix")}` : ""),
           value: r.id,
         };
       })}

@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use crate::client_db::ClientDb;
 use crate::error::Result;
-use crate::models::{EditorKeymap, Settings, SettingsIden};
+use crate::models::{Settings, SettingsIden};
 use crate::util::UpdateSource;
 
 impl<'a> ClientDb<'a> {
@@ -13,36 +11,7 @@ impl<'a> ClientDb<'a> {
             return s;
         };
 
-        let settings = Settings {
-            model: "settings".to_string(),
-            id,
-            created_at: Default::default(),
-            updated_at: Default::default(),
-
-            appearance: "system".to_string(),
-            client_certificates: Vec::new(),
-            editor_font_size: 12,
-            editor_font: None,
-            editor_keymap: EditorKeymap::Default,
-            editor_soft_wrap: true,
-            interface_font_size: 14,
-            interface_scale: 1.0,
-            interface_font: None,
-            hide_window_controls: false,
-            use_native_titlebar: false,
-            open_workspace_new_window: None,
-            proxy: None,
-            theme_dark: "yaak-dark".to_string(),
-            theme_light: "yaak-light".to_string(),
-            update_channel: "stable".to_string(),
-            autoupdate: true,
-            colored_methods: false,
-            hide_license_badge: false,
-            prompt_feedback: true,
-            auto_download_updates: true,
-            check_notifications: true,
-            hotkeys: HashMap::new(),
-        };
+        let settings = Settings { id, ..Default::default() };
         self.upsert(&settings, &UpdateSource::Background).expect("Failed to upsert settings")
     }
 

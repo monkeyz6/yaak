@@ -1,3 +1,4 @@
+import { useTranslation } from "@yaakapp-internal/i18n";
 import {
   grpcConnectionsAtom,
   httpResponsesAtom,
@@ -7,21 +8,31 @@ import { useAtomValue } from "jotai";
 import { showAlert } from "../lib/alert";
 import { showConfirmDelete } from "../lib/confirm";
 import { jotaiStore } from "../lib/jotai";
-import { pluralizeCount } from "../lib/pluralize";
 import { invokeCmd } from "../lib/tauri";
 import { activeWorkspaceIdAtom } from "./useActiveWorkspace";
 import { useFastMutation } from "./useFastMutation";
 
 export function useDeleteSendHistory() {
+  const { t } = useTranslation();
   const httpResponses = useAtomValue(httpResponsesAtom);
   const grpcConnections = useAtomValue(grpcConnectionsAtom);
   const websocketConnections = useAtomValue(websocketConnectionsAtom);
 
   const labels = [
-    httpResponses.length > 0 ? pluralizeCount("Http Response", httpResponses.length) : null,
-    grpcConnections.length > 0 ? pluralizeCount("Grpc Connection", grpcConnections.length) : null,
+    httpResponses.length > 0
+      ? httpResponses.length === 1
+        ? t("response.sendHistoryHttpResponseOne", { count: httpResponses.length })
+        : t("response.sendHistoryHttpResponseMany", { count: httpResponses.length })
+      : null,
+    grpcConnections.length > 0
+      ? grpcConnections.length === 1
+        ? t("response.sendHistoryGrpcConnectionOne", { count: grpcConnections.length })
+        : t("response.sendHistoryGrpcConnectionMany", { count: grpcConnections.length })
+      : null,
     websocketConnections.length > 0
-      ? pluralizeCount("WebSocket Connection", websocketConnections.length)
+      ? websocketConnections.length === 1
+        ? t("response.sendHistoryWebsocketConnectionOne", { count: websocketConnections.length })
+        : t("response.sendHistoryWebsocketConnectionMany", { count: websocketConnections.length })
       : null,
   ].filter((l) => l != null);
 
@@ -31,16 +42,20 @@ export function useDeleteSendHistory() {
       if (labels.length === 0) {
         showAlert({
           id: "no-responses",
-          title: "Nothing to Delete",
-          body: "There is no Http, Grpc, or Websocket history",
+          title: t("response.sendHistoryNothingTitle"),
+          body: t("response.sendHistoryNothingBody"),
         });
         return;
       }
 
       const confirmed = await showConfirmDelete({
         id: "delete-send-history",
-        title: "Clear Send History",
-        description: <>Delete {labels.join(" and ")}?</>,
+        title: t("response.sendHistoryClearTitle"),
+        description: (
+          <>
+            {t("response.sendHistoryDeleteConfirm", { labels: labels.join(t("common.joinAnd")) })}
+          </>
+        ),
       });
       if (!confirmed) return false;
 

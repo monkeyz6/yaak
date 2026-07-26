@@ -5,8 +5,9 @@ import type {
   WebsocketRequest,
   Workspace,
 } from "@yaakapp-internal/models";
+import { useTranslation } from "@yaakapp-internal/i18n";
 import { patchModel } from "@yaakapp-internal/models";
-import { HStack, Icon, InlineCode } from "@yaakapp-internal/ui";
+import { HStack, Icon } from "@yaakapp-internal/ui";
 import { useCallback } from "react";
 import { openFolderSettings } from "../commands/openFolderSettings";
 import { openWorkspaceSettings } from "../commands/openWorkspaceSettings";
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export function HttpAuthenticationEditor({ model }: Props) {
+  const { t } = useTranslation();
   const inheritedAuth = useInheritedAuthentication(model);
   const authConfig = useHttpAuthenticationConfig(
     model.authenticationType,
@@ -38,22 +40,18 @@ export function HttpAuthenticationEditor({ model }: Props) {
   );
 
   const handleChange = useCallback(
-    async (authentication: Record<string, unknown>) =>
-      await patchModel(model, { authentication }),
+    async (authentication: Record<string, unknown>) => await patchModel(model, { authentication }),
     [model],
   );
 
   if (model.authenticationType === "none") {
-    return <EmptyStateText>No authentication</EmptyStateText>;
+    return <EmptyStateText>{t("response.noAuthentication")}</EmptyStateText>;
   }
 
   if (model.authenticationType != null && authConfig.data == null) {
     return (
       <EmptyStateText>
-        <p>
-          Auth plugin not found for{" "}
-          <InlineCode>{model.authenticationType}</InlineCode>
-        </p>
+        <p>{t("response.authPluginNotFound", { type: model.authenticationType })}</p>
       </EmptyStateText>
     );
   }
@@ -64,41 +62,36 @@ export function HttpAuthenticationEditor({ model }: Props) {
         <EmptyStateText className="flex-col gap-3">
           <div className="not-italic flex flex-col items-center gap-3 text-center">
             <p className="max-w-md text-sm text-text-subtle">
-              Choose an auth method to apply it to all requests in{" "}
-              <strong className="font-semibold text-text-subtle">
-                {resolvedModelName(model)}
-              </strong>
-              .
+              {t("response.chooseAuthMethod", { name: resolvedModelName(model) })}
             </p>
             <AuthenticationTypeDropdown model={model} />
             <Link href="https://yaak.app/docs/using-yaak/request-inheritance">
-              Documentation
+              {t("response.documentation")}
             </Link>
           </div>
         </EmptyStateText>
       );
     }
-    return <EmptyStateText>No authentication</EmptyStateText>;
+    return <EmptyStateText>{t("response.noAuthentication")}</EmptyStateText>;
   }
 
   if (inheritedAuth.authenticationType === "none") {
-    return <EmptyStateText>No authentication</EmptyStateText>;
+    return <EmptyStateText>{t("response.noAuthentication")}</EmptyStateText>;
   }
 
   const wasAuthInherited = inheritedAuth?.id !== model.id;
   if (wasAuthInherited) {
     const name = resolvedModelName(inheritedAuth);
-    const cta = inheritedAuth.model === "workspace" ? "Workspace" : name;
+    const cta = inheritedAuth.model === "workspace" ? t("deleteModel.model.workspace") : name;
     return (
       <EmptyStateText>
         <p>
-          Inherited from{" "}
+          {t("response.inheritedFrom")}{" "}
           <button
             type="submit"
             className="underline hover:text-text"
             onClick={() => {
-              if (inheritedAuth.model === "folder")
-                openFolderSettings(inheritedAuth.id, "auth");
+              if (inheritedAuth.model === "folder") openFolderSettings(inheritedAuth.id, "auth");
               else openWorkspaceSettings("auth");
             }}
           >
@@ -114,21 +107,20 @@ export function HttpAuthenticationEditor({ model }: Props) {
       <div>
         <HStack space={2} alignItems="start">
           <SegmentedControl
-            label="Enabled"
+            label={t("response.enabled")}
             hideLabel
             name="enabled"
             value={
-              model.authentication.disabled === false ||
-              model.authentication.disabled == null
+              model.authentication.disabled === false || model.authentication.disabled == null
                 ? "__TRUE__"
                 : model.authentication.disabled === true
                   ? "__FALSE__"
                   : "__DYNAMIC__"
             }
             options={[
-              { label: "Enabled", value: "__TRUE__" },
-              { label: "Disabled", value: "__FALSE__" },
-              { label: "Enabled when...", value: "__DYNAMIC__" },
+              { label: t("response.enabled"), value: "__TRUE__" },
+              { label: t("response.disabled"), value: "__FALSE__" },
+              { label: t("response.enabledWhen"), value: "__DYNAMIC__" },
             ]}
             onChange={async (enabled) => {
               let disabled: boolean | string;
@@ -153,7 +145,7 @@ export function HttpAuthenticationEditor({ model }: Props) {
               )}
             >
               <IconButton
-                title="Authentication Actions"
+                title={t("response.authenticationActions")}
                 icon="settings"
                 size="xs"
                 className="text-secondary!"
@@ -167,9 +159,7 @@ export function HttpAuthenticationEditor({ model }: Props) {
               className="w-full"
               stateKey={`auth.${model.id}.dynamic`}
               value={model.authentication.disabled}
-              onChange={(v) =>
-                handleChange({ ...model.authentication, disabled: v })
-              }
+              onChange={(v) => handleChange({ ...model.authentication, disabled: v })}
             />
           </div>
         )}
@@ -188,6 +178,7 @@ export function HttpAuthenticationEditor({ model }: Props) {
 }
 
 function AuthenticationTypeDropdown({ model }: Props) {
+  const { t } = useTranslation();
   const options = useAuthDropdownOptions(model);
 
   if (options == null) return null;
@@ -204,11 +195,9 @@ function AuthenticationTypeDropdown({ model }: Props) {
         color="secondary"
         variant="border"
         size="sm"
-        rightSlot={
-          <Icon icon="chevron_down" size="sm" className="text-text-subtle" />
-        }
+        rightSlot={<Icon icon="chevron_down" size="sm" className="text-text-subtle" />}
       >
-        Select Auth
+        {t("response.selectAuth")}
       </Button>
     </RadioDropdown>
   );
@@ -225,6 +214,7 @@ function AuthenticationDisabledInput({
   stateKey: string;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const rendered = useRenderTemplate({
     template: value,
     enabled: true,
@@ -236,18 +226,18 @@ function AuthenticationDisabledInput({
     <Input
       size="sm"
       className={className}
-      label="Dynamic Disabled"
+      label={t("response.dynamicDisabled")}
       hideLabel
       defaultValue={value}
-      placeholder="Enabled when this renders a non-empty value"
+      placeholder={t("response.dynamicDisabledPlaceholder")}
       rightSlot={
         <div className="px-1 flex items-center">
           <div className="rounded-full bg-surface-highlight text-xs px-1.5 py-0.5 text-text-subtle whitespace-nowrap">
             {rendered.isPending
-              ? "loading"
+              ? t("response.dynamicStatusLoading")
               : rendered.data
-                ? "enabled"
-                : "disabled"}
+                ? t("response.dynamicStatusEnabled")
+                : t("response.dynamicStatusDisabled")}
           </div>
         </div>
       }
