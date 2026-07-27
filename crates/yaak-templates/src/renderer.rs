@@ -68,6 +68,117 @@ pub async fn parse_and_render<T: TemplateCallback>(
     parse_and_render_at_depth(template, vars, cb, opt, 1).await
 }
 
+/// Render a JSON document containing template tags.
+///
+/// Template tags inside JSON strings retain the existing text-substitution behavior. Tags outside
+/// strings are treated as complete JSON values: valid JSON results keep their type, while other
+/// results are encoded as JSON strings.
+pub async fn parse_and_render_json<T: TemplateCallback>(
+    template: &str,
+    vars: &HashMap<String, String>,
+    cb: &T,
+    opt: &RenderOptions,
+) -> Result<String> {
+    let mut parser = Parser::new(template);
+    let tokens = parser.parse()?;
+    render_json(tokens, vars, cb, opt, 2).await
+}
+
+#[derive(Default)]
+struct JsonContext {
+    in_string: bool,
+    string_escape: bool,
+    in_line_comment: bool,
+    in_block_comment: bool,
+}
+
+impl JsonContext {
+    fn is_bare_value(&self) -> bool {
+        !self.in_string && !self.in_line_comment && !self.in_block_comment
+    }
+
+    fn scan(&mut self, text: &str) {
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if self.in_line_comment {
+                if ch == '\n' {
+                    self.in_line_comment = false;
+                }
+                continue;
+            }
+
+            if self.in_block_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    self.in_block_comment = false;
+                }
+                continue;
+            }
+
+            if self.in_string {
+                if self.string_escape {
+                    self.string_escape = false;
+                } else if ch == '\\' {
+                    self.string_escape = true;
+                } else if ch == '"' {
+                    self.in_string = false;
+                }
+                continue;
+            }
+
+            if ch == '"' {
+                self.in_string = true;
+            } else if ch == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                self.in_line_comment = true;
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                self.in_block_comment = true;
+            }
+        }
+    }
+}
+
+async fn render_json<T: TemplateCallback>(
+    tokens: Tokens,
+    vars: &HashMap<String, String>,
+    cb: &T,
+    opt: &RenderOptions,
+    mut depth: usize,
+) -> Result<String> {
+    depth += 1;
+    if depth > MAX_DEPTH {
+        return opt.error_behavior.handle(Err(RenderStackExceededError));
+    }
+
+    let mut output = String::new();
+    let mut context = JsonContext::default();
+    for token in tokens.tokens {
+        match token {
+            Token::Raw { text } => {
+                context.scan(&text);
+                output.push_str(&text);
+            }
+            Token::Tag { val } => {
+                let rendered = opt
+                    .error_behavior
+                    .handle(render_value(val, vars, cb, opt, depth).await)?;
+                if context.is_bare_value() {
+                    if serde_json::from_str::<serde_json::Value>(&rendered).is_ok() {
+                        output.push_str(&rendered);
+                    } else {
+                        output.push_str(&serde_json::to_string(&rendered).unwrap());
+                    }
+                } else {
+                    output.push_str(&rendered);
+                }
+            }
+            Token::Eof => {}
+        }
+    }
+    Ok(output)
+}
+
 pub enum RenderErrorBehavior {
     Throw,
     ReturnEmpty,
@@ -529,6 +640,146 @@ mod parse_and_render_tests {
             Err(RenderError("Failed to do it!".to_string()))
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod parse_and_render_json_tests {
+    use crate::error::Result;
+    use crate::{RenderOptions, TemplateCallback, parse_and_render_json};
+    use std::collections::HashMap;
+
+    struct TestCB {}
+
+    impl TemplateCallback for TestCB {
+        async fn run(
+            &self,
+            fn_name: &str,
+            args: HashMap<String, serde_json::Value>,
+        ) -> Result<String> {
+            match fn_name {
+                "json.escape" => Ok(args
+                    .get("input")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")),
+                _ => unreachable!(),
+            }
+        }
+
+        fn transform_arg(
+            &self,
+            _fn_name: &str,
+            _arg_name: &str,
+            arg_value: &str,
+        ) -> Result<String> {
+            Ok(arg_value.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn renders_bare_string_as_json_string() -> Result<()> {
+        let vars = HashMap::from([("model".to_string(), "gpt-5.1".to_string())]);
+        let result = parse_and_render_json(
+            r#"{"model": ${[ model ]}}"#,
+            &vars,
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(result, r#"{"model": "gpt-5.1"}"#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_valid_json_value_types() -> Result<()> {
+        let vars = HashMap::from([
+            ("number".to_string(), "2048".to_string()),
+            ("boolean".to_string(), "true".to_string()),
+            ("null_value".to_string(), "null".to_string()),
+            ("object".to_string(), r#"{"city":"Shanghai"}"#.to_string()),
+            ("array".to_string(), r#"["a","b"]"#.to_string()),
+        ]);
+        let result = parse_and_render_json(
+            r#"{"n":${[number]},"b":${[boolean]},"z":${[null_value]},"o":${[object]},"a":${[array]}}"#,
+            &vars,
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+            serde_json::json!({
+                "n": 2048,
+                "b": true,
+                "z": null,
+                "o": {"city": "Shanghai"},
+                "a": ["a", "b"],
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renders_multiple_nested_template_values() -> Result<()> {
+        let vars = HashMap::from([
+            ("model".to_string(), "${[ model_name ]}".to_string()),
+            ("model_name".to_string(), "gpt-5".to_string()),
+            ("tokens".to_string(), "1024".to_string()),
+        ]);
+        let result = parse_and_render_json(
+            r#"{"model":${[model]},"max_tokens":${[tokens]}}"#,
+            &vars,
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(result, r#"{"model":"gpt-5","max_tokens":1024}"#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retains_quoted_template_text_behavior() -> Result<()> {
+        let vars = HashMap::from([("text".to_string(), "Hello \"World\"".to_string())]);
+        let result = parse_and_render_json(
+            r#"{"value":"${[ json.escape(input=text) ]}"}"#,
+            &vars,
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+            serde_json::json!({"value": "Hello \"World\""})
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ignores_string_delimiters_inside_json_comments() -> Result<()> {
+        let vars = HashMap::from([("model".to_string(), "gpt-5".to_string())]);
+        let result = parse_and_render_json(
+            "{\n  // a comment with \"quotes\"\n  \"model\": ${[model]}\n}",
+            &vars,
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert!(result.contains(r#""model": "gpt-5""#));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn returns_missing_variable_error() {
+        let result = parse_and_render_json(
+            r#"{"model":${[missing]}}"#,
+            &HashMap::new(),
+            &TestCB {},
+            &RenderOptions::throw(),
+        )
+        .await;
+        assert!(result.is_err());
     }
 }
 

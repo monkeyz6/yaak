@@ -30,11 +30,160 @@ export interface AiConversionResult {
 
 const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
 
-export function parseAiRequestBody(text: string): unknown {
-  return jsonLintParse(text, {
-    mode: "cjson",
-    ignoreTrailingCommas: true,
-  });
+export interface ParsedAiRequestBody {
+  body: unknown;
+  templates: ReadonlyMap<string, string>;
+}
+
+export function parseAiRequestBody(text: string): ParsedAiRequestBody {
+  const masked = maskBareTemplateValues(text);
+  return {
+    body: jsonLintParse(masked.text, {
+      mode: "cjson",
+      ignoreTrailingCommas: true,
+    }),
+    templates: masked.templates,
+  };
+}
+
+export function stringifyAiRequestBody(
+  body: unknown,
+  templates: ReadonlyMap<string, string>,
+): string {
+  const restored = restoreEmbeddedTemplates(body, templates);
+  let text = JSON.stringify(restored, null, 2);
+  if (text == null) throw new Error("AI request body cannot be serialized");
+
+  for (const [placeholder, template] of templates) {
+    text = text.split(JSON.stringify(placeholder)).join(template);
+  }
+  return text;
+}
+
+interface JsonScanContext {
+  inString: boolean;
+  stringEscape: boolean;
+  inLineComment: boolean;
+  inBlockComment: boolean;
+}
+
+function maskBareTemplateValues(text: string): {
+  text: string;
+  templates: ReadonlyMap<string, string>;
+} {
+  let prefix = "__YAAK_AI_TEMPLATE_VALUE__";
+  while (text.includes(prefix)) prefix += "_";
+
+  const templates = new Map<string, string>();
+  const context: JsonScanContext = {
+    inString: false,
+    stringEscape: false,
+    inLineComment: false,
+    inBlockComment: false,
+  };
+  let output = "";
+
+  for (let offset = 0; offset < text.length; ) {
+    if (text.startsWith("${[", offset) && !isEscapedTemplateStart(text, offset)) {
+      const end = findTemplateEnd(text, offset + 3);
+      if (end != null) {
+        const template = text.slice(offset, end);
+        if (!context.inString && !context.inLineComment && !context.inBlockComment) {
+          const placeholder = `${prefix}${templates.size}__`;
+          templates.set(placeholder, template);
+          output += JSON.stringify(placeholder);
+        } else {
+          output += template;
+        }
+        offset = end;
+        continue;
+      }
+    }
+
+    const ch = text[offset] ?? "";
+    const next = text[offset + 1] ?? "";
+    output += ch;
+
+    if (context.inLineComment) {
+      if (ch === "\n") context.inLineComment = false;
+    } else if (context.inBlockComment) {
+      if (ch === "*" && next === "/") {
+        output += next;
+        offset += 1;
+        context.inBlockComment = false;
+      }
+    } else if (context.inString) {
+      if (context.stringEscape) {
+        context.stringEscape = false;
+      } else if (ch === "\\") {
+        context.stringEscape = true;
+      } else if (ch === '"') {
+        context.inString = false;
+      }
+    } else if (ch === '"') {
+      context.inString = true;
+    } else if (ch === "/" && next === "/") {
+      output += next;
+      offset += 1;
+      context.inLineComment = true;
+    } else if (ch === "/" && next === "*") {
+      output += next;
+      offset += 1;
+      context.inBlockComment = true;
+    }
+
+    offset += 1;
+  }
+
+  return { text: output, templates };
+}
+
+function findTemplateEnd(text: string, start: number): number | null {
+  let inString = false;
+  let escaped = false;
+  for (let offset = start; offset < text.length; offset += 1) {
+    const ch = text[offset];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === "'") inString = false;
+      continue;
+    }
+    if (ch === "'") {
+      inString = true;
+    } else if (ch === "]" && text[offset + 1] === "}") {
+      return offset + 2;
+    }
+  }
+  return null;
+}
+
+function isEscapedTemplateStart(text: string, offset: number): boolean {
+  let backslashes = 0;
+  for (let index = offset - 1; index >= 0 && text[index] === "\\"; index -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function restoreEmbeddedTemplates(value: unknown, templates: ReadonlyMap<string, string>): unknown {
+  if (typeof value === "string") {
+    if (templates.has(value)) return value;
+    let restored = value;
+    for (const [placeholder, template] of templates) {
+      restored = restored.split(placeholder).join(template);
+    }
+    return restored;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => restoreEmbeddedTemplates(item, templates));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, restoreEmbeddedTemplates(item, templates)]),
+    );
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import {
   convertAiRequestBody,
   detectAiRequestFormat,
   parseAiRequestBody,
+  stringifyAiRequestBody,
   type AiRequestFormat,
 } from "./aiRequestConversion";
 
@@ -414,6 +415,64 @@ describe("detectAiRequestFormat", () => {
 describe("parseAiRequestBody", () => {
   it("parses JSONC with comments and trailing commas", () => {
     const parsed = parseAiRequestBody('{\n  // model\n  "model": "gpt-5",\n}');
-    expect(parsed).toEqual({ model: "gpt-5" });
+    expect(parsed.body).toEqual({ model: "gpt-5" });
+    expect(parsed.templates.size).toBe(0);
+  });
+
+  it("parses and restores bare template values", () => {
+    const original = `{
+  // Keep the selected model dynamic
+  "model": ${"${[ model_zh ]}"},
+  "max_completion_tokens": ${"${[ token_limit ]}"},
+  "messages": [
+    { "role": "user", "content": ${"${[ prompt ]}"} },
+  ],
+}`;
+    const parsed = parseAiRequestBody(original);
+    expect(parsed.templates.size).toBe(3);
+
+    const result = convertAiRequestBody(
+      parsed.body,
+      "openai_chat_completions",
+      "anthropic_messages",
+    );
+    const converted = stringifyAiRequestBody(result.body, parsed.templates);
+
+    expect(converted).toContain('"model": ${[ model_zh ]}');
+    expect(converted).toContain('"max_tokens": ${[ token_limit ]}');
+    expect(converted).toContain('"content": ${[ prompt ]}');
+    expect(converted).not.toContain("__YAAK_AI_TEMPLATE_VALUE__");
+  });
+
+  it("preserves templates in scalar tool fields", () => {
+    const parsed = parseAiRequestBody(`{
+      "model": ${"${[ model ]}"},
+      "messages": [{ "role": "user", "content": "Hi" }],
+      "tools": [{
+        "type": "function",
+        "function": {
+          "name": ${"${[ tool_name ]}"},
+          "description": ${"${[ tool_description ]}"},
+          "parameters": { "type": "object" }
+        }
+      }]
+    }`);
+    const result = convertAiRequestBody(parsed.body, "openai_chat_completions", "openai_responses");
+    const converted = stringifyAiRequestBody(result.body, parsed.templates);
+
+    expect(converted).toContain('"model": ${[ model ]}');
+    expect(converted).toContain('"name": ${[ tool_name ]}');
+    expect(converted).toContain('"description": ${[ tool_description ]}');
+  });
+
+  it("keeps quoted template tags as strings", () => {
+    const original = `{"model":"prefix-${"${[ model ]}"}"}`;
+    const parsed = parseAiRequestBody(original);
+    expect(parsed.body).toEqual({ model: "prefix-${[ model ]}" });
+    expect(parsed.templates.size).toBe(0);
+  });
+
+  it("rejects invalid non-template JSON", () => {
+    expect(() => parseAiRequestBody('{"model": definitely not json}')).toThrow();
   });
 });

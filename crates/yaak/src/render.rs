@@ -6,7 +6,10 @@ use yaak_models::models::{
     Environment, GrpcRequest, HttpRequest, HttpRequestHeader, HttpUrlParameter,
 };
 use yaak_models::render::make_vars_hashmap;
-use yaak_templates::{RenderOptions, TemplateCallback, parse_and_render, render_json_value_raw};
+use yaak_templates::{
+    RenderOptions, TemplateCallback, parse_and_render, parse_and_render_json,
+    render_json_value_raw,
+};
 
 pub async fn render_http_request<T: TemplateCallback>(
     request: &HttpRequest,
@@ -47,7 +50,13 @@ pub async fn render_http_request<T: TemplateCallback>(
     let mut body = BTreeMap::new();
     for (key, value) in request.body.clone() {
         let value = if key == "form" { strip_disabled_form_entries(value) } else { value };
-        body.insert(key, render_json_value_raw(value, vars, callback, options).await?);
+        let value = match (key.as_str(), request.body_type.as_deref(), value) {
+            ("text", Some("application/json"), Value::String(text)) => Value::String(
+                parse_and_render_json(&text, vars, callback, options).await?,
+            ),
+            (_, _, value) => render_json_value_raw(value, vars, callback, options).await?,
+        };
+        body.insert(key, value);
     }
 
     let authentication = {
@@ -165,6 +174,42 @@ fn strip_disabled_form_entries(v: Value) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
+    use yaak_models::models::EnvironmentVariable;
+    use yaak_templates::error::Result;
+
+    struct EmptyCB {}
+
+    impl TemplateCallback for EmptyCB {
+        async fn run(
+            &self,
+            _fn_name: &str,
+            _args: HashMap<String, serde_json::Value>,
+        ) -> Result<String> {
+            unreachable!()
+        }
+
+        fn transform_arg(
+            &self,
+            _fn_name: &str,
+            _arg_name: &str,
+            arg_value: &str,
+        ) -> Result<String> {
+            Ok(arg_value.to_string())
+        }
+    }
+
+    fn environment(name: &str, value: &str) -> Environment {
+        Environment {
+            variables: vec![EnvironmentVariable {
+                enabled: true,
+                name: name.to_string(),
+                value: value.to_string(),
+                id: None,
+            }],
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_strip_disabled_form_entries() {
@@ -213,5 +258,47 @@ mod tests {
         let input = json!("just a string");
         let result = strip_disabled_form_entries(input.clone());
         assert_eq!(result, input);
+    }
+
+    #[tokio::test]
+    async fn renders_bare_template_as_json_body_value() -> Result<()> {
+        let request = HttpRequest {
+            body_type: Some("application/json".to_string()),
+            body: BTreeMap::from([(
+                "text".to_string(),
+                json!(r#"{"model": ${[ model ]}}"#),
+            )]),
+            ..Default::default()
+        };
+        let rendered = render_http_request(
+            &request,
+            vec![environment("model", "gpt-5")],
+            &EmptyCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(
+            rendered.body.get("text"),
+            Some(&json!(r#"{"model": "gpt-5"}"#))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn leaves_non_json_body_template_rendering_unchanged() -> Result<()> {
+        let request = HttpRequest {
+            body_type: Some("text/plain".to_string()),
+            body: BTreeMap::from([("text".to_string(), json!("${[ model ]}"))]),
+            ..Default::default()
+        };
+        let rendered = render_http_request(
+            &request,
+            vec![environment("model", "gpt-5")],
+            &EmptyCB {},
+            &RenderOptions::throw(),
+        )
+        .await?;
+        assert_eq!(rendered.body.get("text"), Some(&json!("gpt-5")));
+        Ok(())
     }
 }

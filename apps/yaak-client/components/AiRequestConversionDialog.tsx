@@ -7,6 +7,7 @@ import {
   convertAiRequestBody,
   detectAiRequestFormat,
   parseAiRequestBody,
+  stringifyAiRequestBody,
   type AiRequestFormat,
   type ConversionWarningCode,
 } from "../lib/aiRequestConversion";
@@ -52,12 +53,13 @@ export function AiRequestConversionDialog({ request, hide }: Props) {
   const original = String(request.body?.text ?? "");
   const parsed = useMemo(() => {
     try {
-      return { body: parseAiRequestBody(original), error: null };
+      return { document: parseAiRequestBody(original), error: null };
     } catch (error) {
-      return { body: null, error: String(error) };
+      return { document: null, error: String(error) };
     }
   }, [original]);
-  const inferred = detectAiRequestFormat(parsed.body, request.url) ?? "openai_chat_completions";
+  const inferred =
+    detectAiRequestFormat(parsed.document?.body, request.url) ?? "openai_chat_completions";
   const [source, setSource] = useState<AiRequestFormat>(inferred);
   const [target, setTarget] = useState<AiRequestFormat>(
     FORMATS.find((format) => format !== inferred) ?? "openai_responses",
@@ -65,18 +67,21 @@ export function AiRequestConversionDialog({ request, hide }: Props) {
   const [updateEndpoint, setUpdateEndpoint] = useState<boolean>(true);
 
   const result = useMemo(() => {
-    if (parsed.body == null || source === target) return null;
+    if (parsed.document == null || source === target) return null;
     try {
-      return convertAiRequestBody(parsed.body, source, target);
+      return convertAiRequestBody(parsed.document.body, source, target);
     } catch {
       return null;
     }
-  }, [parsed.body, source, target]);
+  }, [parsed.document, source, target]);
   const endpoint = useMemo(
     () => convertAiRequestEndpoint({ url: request.url, headers: request.headers }, source, target),
     [request.url, request.headers, source, target],
   );
-  const modified = result == null ? original : JSON.stringify(result.body, null, 2);
+  const modified =
+    result == null || parsed.document == null
+      ? original
+      : stringifyAiRequestBody(result.body, parsed.document.templates);
   const options = FORMATS.map((format) => ({ label: formatLabel(format, t), value: format }));
   const hasEndpointChanges = endpoint.url != null || endpoint.headers != null;
 
