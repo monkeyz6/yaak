@@ -5,9 +5,11 @@ import { useAtom, useAtomValue } from "jotai";
 import { memo } from "react";
 import { activeWorkspaceAtom, activeWorkspaceMetaAtom } from "../hooks/useActiveWorkspace";
 import { useToggleCommandPalette } from "../hooks/useToggleCommandPalette";
+import { useVariableQuickSwitch } from "../hooks/useVariableQuickSwitch";
 import { workspaceLayoutAtom } from "../lib/atoms";
 import { setupOrConfigureEncryption } from "../lib/setupOrConfigureEncryption";
 import { CookieDropdown } from "./CookieDropdown";
+import { Button } from "./core/Button";
 import { IconButton } from "./core/IconButton";
 import { PillButton } from "./core/PillButton";
 import { EnvironmentActionsDropdown } from "./EnvironmentActionsDropdown";
@@ -37,6 +39,7 @@ export const WorkspaceHeader = memo(function WorkspaceHeader({
     workspaceMeta != null &&
     workspace.encryptionKeyChallenge != null &&
     workspaceMeta.encryptionKey == null;
+  const qs = useVariableQuickSwitch();
 
   return (
     <div
@@ -48,6 +51,17 @@ export const WorkspaceHeader = memo(function WorkspaceHeader({
       <HStack space={0.5} className={classNames("flex-1 pointer-events-none")}>
         <SidebarActions floating={floatingSidebar} />
         <CookieDropdown />
+        <Button
+          size="sm"
+          className={classNames(
+            "px-2! pointer-events-auto",
+            (!qs.collapsed || qs.pinned.length > 0) && "text-primary",
+          )}
+          title={qs.collapsed ? t("variableQuick.expand") : t("variableQuick.collapse")}
+          onClick={qs.toggleCollapsed}
+        >
+          <Icon icon="pin" size="sm" />
+        </Button>
         <HStack className="min-w-0">
           <WorkspaceActionsDropdown />
           <Icon icon="chevron_right" color="secondary" />

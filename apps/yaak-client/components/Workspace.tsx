@@ -41,6 +41,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { FolderLayout } from "./FolderLayout";
 import { GrpcConnectionLayout } from "./GrpcConnectionLayout";
 import { HttpRequestLayout } from "./HttpRequestLayout";
+import { PinnedVarsBar } from "./PinnedVarsBar";
 import Sidebar from "./Sidebar";
 import { SidebarActions } from "./SidebarActions";
 import { WebsocketRequestLayout } from "./WebsocketRequestLayout";
@@ -138,8 +139,9 @@ export function Workspace() {
   );
 
   return (
-    <div className="grid w-full h-full grid-rows-[auto_minmax(0,1fr)]">
+    <div className="grid w-full h-full grid-rows-[auto_auto_minmax(0,1fr)]">
       {header}
+      <PinnedVarsBar />
       <SidebarLayout
         width={width ?? 250}
         onWidthChange={setWidth}

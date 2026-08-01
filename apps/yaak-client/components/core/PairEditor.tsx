@@ -12,6 +12,7 @@ import {
 import { basename } from "@tauri-apps/api/path";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import classNames from "classnames";
+import type { ReactNode } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WrappedEnvironmentVariable } from "../../hooks/useEnvironmentVariables";
 import { useRandomKey } from "../../hooks/useRandomKey";
@@ -55,6 +56,7 @@ export type PairEditorProps = {
   noScroll?: boolean;
   onChange: (pairs: PairWithId[]) => void;
   pairs: Pair[];
+  renderRowStartSlot?: (pair: PairWithId) => ReactNode;
   stateKey: InputProps["stateKey"];
   setRef?: (n: PairEditorHandle) => void;
   valueAutocomplete?: (name: string) => GenericCompletionConfig | undefined;
@@ -97,6 +99,7 @@ export function PairEditor({
   noScroll,
   onChange,
   pairs: originalPairs,
+  renderRowStartSlot,
   stateKey,
   valueAutocomplete,
   valueAutocompleteFunctions,
@@ -318,6 +321,7 @@ export function PairEditor({
                   onFocusName={handleFocusName}
                   onFocusValue={handleFocusValue}
                   pair={p}
+                  renderRowStartSlot={renderRowStartSlot}
                   stateKey={stateKey}
                   valueAutocomplete={valueAutocomplete}
                   valueAutocompleteFunctions={valueAutocompleteFunctions}
@@ -389,6 +393,7 @@ type PairEditorRowProps = {
   | "namePlaceholder"
   | "nameValidate"
   | "nameAutocompleteFunctions"
+  | "renderRowStartSlot"
   | "stateKey"
   | "valueAutocomplete"
   | "valueAutocompleteFunctions"
@@ -424,6 +429,7 @@ export function PairEditorRow({
   onFocusName,
   onFocusValue,
   pair,
+  renderRowStartSlot,
   stateKey,
   valueAutocomplete,
   valueAutocompleteFunctions,
@@ -559,11 +565,19 @@ export function PairEditorRow({
       ref={handleSetRef}
       className={classNames(
         className,
-        "group/pair-row grid grid-cols-[auto_auto_minmax(0,1fr)_auto]",
+        "group/pair-row grid",
+        renderRowStartSlot
+          ? "grid-cols-[auto_auto_auto_minmax(0,1fr)_auto]"
+          : "grid-cols-[auto_auto_minmax(0,1fr)_auto]",
         "grid-rows-1 items-center",
         !pair.enabled && "opacity-60",
       )}
     >
+      {renderRowStartSlot && (
+        <div className="w-5 h-7 flex items-center justify-center">
+          {!isLast && renderRowStartSlot(pair)}
+        </div>
+      )}
       <Checkbox
         hideLabel
         title={pair.enabled ? t("common.disableItem") : t("common.enableItem")}

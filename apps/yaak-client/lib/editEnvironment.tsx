@@ -10,13 +10,19 @@ import { jotaiStore } from "./jotai";
 
 interface Options {
   addOrFocusVariable?: EnvironmentVariable;
+  manageQuickVariables?: boolean;
+  candidateVariableName?: string;
 }
 
 export async function editEnvironment(
   initialEnvironment: Environment | null,
   options: Options = {},
 ) {
-  if (initialEnvironment?.parentModel === "folder" && initialEnvironment.parentId != null) {
+  if (
+    !options.manageQuickVariables &&
+    initialEnvironment?.parentModel === "folder" &&
+    initialEnvironment.parentId != null
+  ) {
     openFolderSettings(initialEnvironment.parentId, "variables");
   } else {
     const { addOrFocusVariable } = options;
@@ -49,6 +55,9 @@ export async function editEnvironment(
       render: () => (
         <EnvironmentEditDialog
           initialEnvironmentId={environment?.id ?? null}
+          initialCandidateVariable={
+            options.manageQuickVariables ? (options.candidateVariableName ?? null) : undefined
+          }
           setRef={(pairEditor: PairEditorHandle | null) => {
             if (focusId && !didFocusVariable) {
               pairEditor?.focusValue(focusId);

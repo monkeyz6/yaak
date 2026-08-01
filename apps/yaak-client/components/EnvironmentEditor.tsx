@@ -9,14 +9,18 @@ import { useEnvironmentsBreakdown } from "../hooks/useEnvironmentsBreakdown";
 import { useIsEncryptionEnabled } from "../hooks/useIsEncryptionEnabled";
 import { useKeyValue } from "../hooks/useKeyValue";
 import { useRandomKey } from "../hooks/useRandomKey";
+import { useVariableQuickSwitch } from "../hooks/useVariableQuickSwitch";
 import { analyzeTemplate, convertTemplateToSecure } from "../lib/encryption";
+import { fireAndForget } from "../lib/fireAndForget";
 import { isBaseEnvironment } from "../lib/model_util";
+import { MAX_PINNED } from "../lib/variableQuickSwitch";
 import {
   setupOrConfigureEncryption,
   withEncryptionEnabled,
 } from "../lib/setupOrConfigureEncryption";
 import { DismissibleBanner } from "./core/DismissibleBanner";
 import type { GenericCompletionConfig } from "./core/Editor/genericCompletion";
+import { IconButton } from "./core/IconButton";
 import type { PairEditorHandle, PairWithId } from "./core/PairEditor";
 import { ensurePairId } from "./core/PairEditor.util";
 import { PairOrBulkEditor } from "./core/PairOrBulkEditor";
@@ -41,6 +45,7 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
     fallback: false,
   });
   const { allEnvironments } = useEnvironmentsBreakdown();
+  const qs = useVariableQuickSwitch();
   const handleChange = useCallback(
     (variables: PairWithId[]) => patchModel(environment, { variables }),
     [environment],
@@ -97,6 +102,36 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
       regenerateForceUpdateKey();
     });
   };
+
+  const renderPinButton = useCallback(
+    (variable: PairWithId) => {
+      const isPinned = qs.pinned.includes(variable.name);
+      const atLimit = !isPinned && qs.pinned.length >= MAX_PINNED;
+      const isValidVariable = variable.name !== "" && validateName(variable.name);
+      return (
+        <IconButton
+          icon="pin"
+          size="2xs"
+          iconSize="xs"
+          iconColor={isPinned ? "primary" : "secondary"}
+          disabled={atLimit || !isValidVariable}
+          className={classNames(
+            "border-0!",
+            isPinned ? "opacity-100" : "opacity-0 group-hover/pair-row:opacity-70",
+          )}
+          title={
+            isPinned
+              ? t("variableQuick.unpinVariable")
+              : atLimit
+                ? t("variableQuick.maxPinned", { count: MAX_PINNED })
+                : t("variableQuick.pinVariable")
+          }
+          onClick={() => fireAndForget(qs.togglePinned(variable.name))}
+        />
+      );
+    },
+    [qs.pinned, qs.togglePinned, t, validateName],
+  );
 
   return (
     <div
@@ -168,6 +203,7 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
         valueAutocompleteFunctions
         forceUpdateKey={`${environment.id}::${forceUpdateKey}`}
         pairs={environment.variables}
+        renderRowStartSlot={renderPinButton}
         onChange={handleChange}
         stateKey={`environment.${environment.id}`}
         forcedEnvironmentId={environment.id}

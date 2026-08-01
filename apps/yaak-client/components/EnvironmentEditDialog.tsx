@@ -5,6 +5,7 @@ import type { TreeHandle, TreeNode, TreeProps } from "@yaakapp-internal/ui";
 import { Banner, Icon, InlineCode, SplitLayout, Tree } from "@yaakapp-internal/ui";
 import { atom, useAtomValue } from "jotai";
 import { atomFamily } from "jotai-family";
+import classNames from "classnames";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createSubEnvironmentAndActivate } from "../commands/createEnvironment";
 import { activeWorkspaceAtom, activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
@@ -13,6 +14,7 @@ import {
   useEnvironmentsBreakdown,
 } from "../hooks/useEnvironmentsBreakdown";
 import { useHotKey } from "../hooks/useHotKey";
+import { useVariableQuickSwitch } from "../hooks/useVariableQuickSwitch";
 import { atomWithKVStorage } from "../lib/atoms/atomWithKVStorage";
 import { deleteModelWithConfirm } from "../lib/deleteModelWithConfirm";
 import { fireAndForget } from "../lib/fireAndForget";
@@ -20,6 +22,7 @@ import { jotaiStore } from "../lib/jotai";
 import { isBaseEnvironment, isSubEnvironment } from "../lib/model_util";
 import { resolvedModelName } from "../lib/resolvedModelName";
 import { showColorPicker } from "../lib/showColorPicker";
+import { MAX_PINNED } from "../lib/variableQuickSwitch";
 import type { ContextMenuProps, DropdownItem } from "./core/Dropdown";
 import { ContextMenu } from "./core/Dropdown";
 import { IconButton } from "./core/IconButton";
@@ -28,6 +31,7 @@ import type { PairEditorHandle } from "./core/PairEditor";
 import { EnvironmentColorIndicator } from "./EnvironmentColorIndicator";
 import { EnvironmentEditor } from "./EnvironmentEditor";
 import { EnvironmentSharableTooltip } from "./EnvironmentSharableTooltip";
+import { VariableCandidateManager } from "./VariableCandidateManager";
 
 const collapsedFamily = atomFamily((treeId: string) => {
   const key = ["env_collapsed", treeId ?? "n/a"];
@@ -36,16 +40,32 @@ const collapsedFamily = atomFamily((treeId: string) => {
 
 interface Props {
   initialEnvironmentId: string | null;
+  initialCandidateVariable?: string | null;
   setRef?: (ref: PairEditorHandle | null) => void;
 }
 
 type TreeModel = Environment | Workspace;
+type RightPanel =
+  | { kind: "environment" }
+  | { kind: "candidate-index" }
+  | { kind: "candidate-detail"; variableName: string };
 
-export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
+export function EnvironmentEditDialog({
+  initialEnvironmentId,
+  initialCandidateVariable,
+  setRef,
+}: Props) {
   const { t } = useTranslation();
   const { allEnvironments, baseEnvironment, baseEnvironments } = useEnvironmentsBreakdown();
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string | null>(
     initialEnvironmentId ?? null,
+  );
+  const [rightPanel, setRightPanel] = useState<RightPanel>(() =>
+    initialCandidateVariable === undefined
+      ? { kind: "environment" }
+      : initialCandidateVariable == null
+        ? { kind: "candidate-index" }
+        : { kind: "candidate-detail", variableName: initialCandidateVariable },
   );
 
   const selectedEnvironment =
@@ -64,33 +84,55 @@ export function EnvironmentEditDialog({ initialEnvironmentId, setRef }: Props) {
         <EnvironmentEditDialogSidebar
           selectedEnvironmentId={selectedEnvironment?.id ?? null}
           setSelectedEnvironmentId={setSelectedEnvironmentId}
+          rightPanel={rightPanel}
+          setRightPanel={setRightPanel}
         />
       )}
-      secondSlot={() => (
-        <div className="grid grid-rows-[auto_minmax(0,1fr)]">
-          {baseEnvironments.length > 1 ? (
-            <div className="p-3">
-              <Banner color="notice">{t("environment.multipleBaseWarning")}</Banner>
-            </div>
-          ) : (
-            <span />
-          )}
-          {selectedEnvironment == null ? (
-            <div className="p-3 mt-10">
-              <Banner color="danger">
-                {t("environment.notFoundSelected")} <InlineCode>{selectedEnvironmentId}</InlineCode>
-              </Banner>
-            </div>
-          ) : (
-            <EnvironmentEditor
-              key={selectedEnvironment.id}
-              setRef={setRef}
-              className="pl-4 pt-3"
-              environment={selectedEnvironment}
-            />
-          )}
-        </div>
-      )}
+      secondSlot={() =>
+        rightPanel.kind !== "environment" ? (
+          <VariableCandidateManager
+            key={
+              rightPanel.kind === "candidate-detail" ? `detail:${rightPanel.variableName}` : "index"
+            }
+            variableName={rightPanel.kind === "candidate-detail" ? rightPanel.variableName : null}
+            onSelectVariable={(variableName) =>
+              setRightPanel({ kind: "candidate-detail", variableName })
+            }
+            onBack={() =>
+              setRightPanel(
+                rightPanel.kind === "candidate-detail"
+                  ? { kind: "candidate-index" }
+                  : { kind: "environment" },
+              )
+            }
+          />
+        ) : (
+          <div className="grid grid-rows-[auto_minmax(0,1fr)]">
+            {baseEnvironments.length > 1 ? (
+              <div className="p-3">
+                <Banner color="notice">{t("environment.multipleBaseWarning")}</Banner>
+              </div>
+            ) : (
+              <span />
+            )}
+            {selectedEnvironment == null ? (
+              <div className="p-3 mt-10">
+                <Banner color="danger">
+                  {t("environment.notFoundSelected")}{" "}
+                  <InlineCode>{selectedEnvironmentId}</InlineCode>
+                </Banner>
+              </div>
+            ) : (
+              <EnvironmentEditor
+                key={selectedEnvironment.id}
+                setRef={setRef}
+                className="pl-4 pt-3"
+                environment={selectedEnvironment}
+              />
+            )}
+          </div>
+        )
+      }
     />
   );
 }
@@ -110,9 +152,13 @@ function SharableTooltip() {
 function EnvironmentEditDialogSidebar({
   selectedEnvironmentId,
   setSelectedEnvironmentId,
+  rightPanel,
+  setRightPanel,
 }: {
   selectedEnvironmentId: string | null;
   setSelectedEnvironmentId: (id: string | null) => void;
+  rightPanel: RightPanel;
+  setRightPanel: (panel: RightPanel) => void;
 }) {
   const { t } = useTranslation();
   const activeWorkspaceId = useAtomValue(activeWorkspaceIdAtom) ?? "";
@@ -316,8 +362,9 @@ function EnvironmentEditDialogSidebar({
   const handleActivate = useCallback(
     (item: TreeModel) => {
       setSelectedEnvironmentId(item.id);
+      setRightPanel({ kind: "environment" });
     },
-    [setSelectedEnvironmentId],
+    [setRightPanel, setSelectedEnvironmentId],
   );
 
   const renderContextMenuFn = useCallback<NonNullable<TreeProps<TreeModel>["renderContextMenu"]>>(
@@ -329,14 +376,14 @@ function EnvironmentEditDialogSidebar({
 
   const tree = useAtomValue(treeAtom);
   return (
-    <aside className="x-theme-sidebar h-full w-full min-w-0 grid overflow-y-auto border-r border-border-subtle ">
+    <aside className="x-theme-sidebar h-full w-full min-w-0 grid grid-rows-[minmax(0,1fr)_auto] overflow-hidden border-r border-border-subtle">
       {tree != null && (
-        <div className="pt-2">
+        <div className="pt-2 min-h-0 overflow-y-auto">
           <Tree
             ref={treeRef}
             treeId={treeId}
             collapsedAtom={collapsedFamily(treeId)}
-            className="px-2 pb-10"
+            className="px-2 pb-6"
             root={tree}
             getContextMenu={getContextMenu}
             renderContextMenu={renderContextMenuFn}
@@ -350,6 +397,21 @@ function EnvironmentEditDialogSidebar({
           />
         </div>
       )}
+      <div className="px-2 pb-4 border-t border-border-subtle pt-2 mt-auto">
+        <PinnedVarsSection
+          onSelectVariable={(variableName) =>
+            setRightPanel({ kind: "candidate-detail", variableName })
+          }
+          selectedVariable={rightPanel.kind === "candidate-detail" ? rightPanel.variableName : null}
+        />
+        <button
+          className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm text-text-subtle hover:bg-surface-highlight hover:text-text mt-1"
+          onClick={() => setRightPanel({ kind: "candidate-index" })}
+        >
+          <Icon icon="sparkles" size="sm" />
+          <span className="truncate">{t("variableQuick.manageCandidates")}</span>
+        </button>
+      </div>
     </aside>
   );
 }
@@ -387,6 +449,51 @@ const treeAtom = atom<TreeNode<TreeModel> | null>((get) => {
 
   return root;
 });
+
+function PinnedVarsSection({
+  selectedVariable,
+  onSelectVariable,
+}: {
+  selectedVariable: string | null;
+  onSelectVariable: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const qs = useVariableQuickSwitch();
+  if (qs.pinned.length === 0) return null;
+  return (
+    <div className="mb-1">
+      <div className="flex items-center gap-1 px-2 text-xs text-text-subtle font-semibold uppercase tracking-wider mb-0.5">
+        <Icon icon="pin" size="xs" color="primary" />
+        {t("variableQuick.pinned")}
+        <span className="text-text-subtlest font-normal ml-auto">
+          {qs.pinned.length}/{MAX_PINNED}
+        </span>
+      </div>
+      {qs.pinned.map((name) => (
+        <button
+          key={name}
+          className={classNames(
+            "w-full flex items-center gap-2 px-2 py-1 rounded text-left text-sm hover:bg-surface-highlight",
+            selectedVariable === name && "bg-surface-highlight text-text",
+          )}
+          onClick={() => onSelectVariable(name)}
+        >
+          <span className="font-mono truncate flex-1 min-w-0 text-text-subtle">{name}</span>
+          <span
+            className="cursor-pointer hover:text-text"
+            onClick={(e) => {
+              e.stopPropagation();
+              fireAndForget(qs.unpin(name));
+            }}
+            title={t("variableQuick.unpinVariable")}
+          >
+            <Icon icon="x" size="2xs" color="secondary" />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function ItemLeftSlotInner({ item }: { item: TreeModel }) {
   const { baseEnvironments } = useEnvironmentsBreakdown();
