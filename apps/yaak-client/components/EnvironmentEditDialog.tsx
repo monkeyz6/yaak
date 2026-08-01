@@ -479,16 +479,6 @@ function PinnedVarsSection({
           onClick={() => onSelectVariable(name)}
         >
           <span className="font-mono truncate flex-1 min-w-0 text-text-subtle">{name}</span>
-          <span
-            className="cursor-pointer hover:text-text"
-            onClick={(e) => {
-              e.stopPropagation();
-              fireAndForget(qs.unpin(name));
-            }}
-            title={t("variableQuick.unpinVariable")}
-          >
-            <Icon icon="x" size="2xs" color="secondary" />
-          </span>
         </button>
       ))}
     </div>

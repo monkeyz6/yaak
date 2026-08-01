@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { memo, useMemo, useState } from "react";
 import { useVariableQuickSwitch } from "../hooks/useVariableQuickSwitch";
 import { fireAndForget } from "../lib/fireAndForget";
-import { parseValues } from "../lib/variableQuickSwitch";
+import { MAX_PINNED, parseValues } from "../lib/variableQuickSwitch";
 import { Button } from "./core/Button";
 import { IconButton } from "./core/IconButton";
 import { PlainInput } from "./core/PlainInput";
@@ -66,22 +66,36 @@ function VariableCandidateIndex({
         ) : (
           filteredNames.map((name) => {
             const isPinned = qs.pinned.includes(name);
+            const atPinnedLimit = !isPinned && qs.pinned.length >= MAX_PINNED;
             const candidateCount = qs.getCandidateValues(name).length;
             return (
-              <button
+              <div
                 key={name}
-                className="w-full min-h-9 flex items-center gap-2 px-4 text-left hover:bg-surface-highlight"
-                onClick={() => onSelectVariable(name)}
+                className="w-full min-h-9 flex items-center gap-1 px-2 hover:bg-surface-highlight"
               >
-                <Icon
-                  icon={isPinned ? "pin" : "empty"}
-                  size="xs"
-                  color={isPinned ? "primary" : "secondary"}
+                <IconButton
+                  icon={isPinned ? "unpin" : "pin"}
+                  size="sm"
+                  iconColor={isPinned ? "primary" : "secondary"}
+                  disabled={atPinnedLimit}
+                  title={
+                    isPinned
+                      ? t("variableQuick.unpinVariable")
+                      : atPinnedLimit
+                        ? t("variableQuick.maxPinned", { count: MAX_PINNED })
+                        : t("variableQuick.pinVariable")
+                  }
+                  onClick={() => fireAndForget(qs.togglePinned(name))}
                 />
-                <span className="font-mono text-sm truncate flex-1 min-w-0">{name}</span>
-                <span className="text-xs text-text-subtlest tabular-nums">{candidateCount}</span>
-                <Icon icon="chevron_right" size="xs" color="secondary" />
-              </button>
+                <button
+                  className="min-w-0 flex-1 self-stretch flex items-center gap-2 px-1 text-left"
+                  onClick={() => onSelectVariable(name)}
+                >
+                  <span className="font-mono text-sm truncate flex-1 min-w-0">{name}</span>
+                  <span className="text-xs text-text-subtlest tabular-nums">{candidateCount}</span>
+                  <Icon icon="chevron_right" size="xs" color="secondary" />
+                </button>
+              </div>
             );
           })
         )}
