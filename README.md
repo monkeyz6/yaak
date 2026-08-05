@@ -12,6 +12,9 @@
     A fast, privacy-first API client for REST, GraphQL, SSE, WebSocket, and gRPC – built with Tauri, Rust, and React.
 </p>
 <p align="center">
+ English | <a href="README_CN.md">中文</a>
+</p>
+<p align="center">
  Development is funded by community-purchased <a href="https://yaak.app/pricing">licenses</a>. You can also <a href="https://github.com/sponsors/gschier">become a sponsor</a> to have your logo appear below. 💖
 </p>
 <br>
@@ -53,6 +56,34 @@ Built with [Tauri](https://tauri.app), Rust, and React, it’s fast, lightweight
 - Insert dynamic values like UUIDs or timestamps with template tags.
 - Pick from built-in themes or build your own.
 - Create plugins to extend authentication, template tags, or the UI.
+
+## Fork Features
+
+This fork ([monkeyz6/yaak](https://github.com/monkeyz6/yaak)) adds the following features on top of the upstream [mountain-loop/yaak](https://github.com/mountain-loop/yaak):
+
+### 🌏 Chinese Localization (i18n)
+
+Full Chinese (Simplified) UI translation. The entire application interface has been localized to provide a native experience for Chinese-speaking users.
+
+### 📋 Post-Response JSONPath Extraction
+
+Automatically extract values from API responses using JSONPath expressions and write them into environment variables. Useful for chaining requests that depend on tokens, IDs, or other dynamic values returned by previous calls.
+
+### 🤖 AI SSE Stream Readable View
+
+Enhanced Server-Sent Events viewer that automatically detects AI streaming formats (OpenAI Chat Completions, OpenAI Responses, Anthropic Messages) and renders a human-readable text view. Includes reasoning/thinking content separation for models that support it.
+
+### 🔄 AI Request Body Format Conversion
+
+Convert request bodies between three major AI API formats:
+
+- **Anthropic Messages** ↔ **OpenAI Chat Completions** ↔ **OpenAI Responses**
+
+Includes warnings for dropped fields, unsupported content types, and other conversion edge cases.
+
+### 📌 Quick Variable Pin & Switch
+
+Pin frequently-used environment variables to a collapsible toolbar for instant access. Quickly switch between candidate values without opening the environment editor — ideal for toggling API keys, base URLs, or feature flags.
 
 ## Contribution Policy
 
