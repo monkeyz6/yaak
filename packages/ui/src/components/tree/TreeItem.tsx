@@ -20,6 +20,7 @@ import {
 } from "./context";
 import type { TreeNode } from "./common";
 import { getNodeKey } from "./common";
+import { isImeCompositionEvent } from "./keyboard";
 import type { TreeProps } from "./Tree";
 import { TreeIndentGuide } from "./TreeIndentGuide";
 
@@ -106,8 +107,14 @@ function TreeItem_<T extends { id: string }>({
     [editing, getEditOptions],
   );
 
+  // NOTE: Unregisters on unmount, or the tree keeps a handle to a component that no longer exists.
+  //  Harmless while every row stayed mounted, but virtualized rows unmount whenever they leave the
+  //  window, and acting on a dead handle does nothing at best (rename) and reports a zeroed rect at
+  //  worst (the context menu opening in the corner of the screen).
   useEffect(() => {
-    setRef?.(node.item, handle);
+    const item = node.item;
+    setRef?.(item, handle);
+    return () => setRef?.(item, null);
   }, [setRef, handle, node.item]);
 
   const ancestorIds = useMemo(() => {
@@ -170,6 +177,8 @@ function TreeItem_<T extends { id: string }>({
   const handleEditKeyDown = useCallback(
     async (e: ReactKeyboardEvent<HTMLInputElement>) => {
       e.stopPropagation(); // Don't trigger other tree keys (like arrows)
+      if (isImeCompositionEvent(e.nativeEvent)) return;
+
       switch (e.key) {
         case "Enter":
           if (editing) {

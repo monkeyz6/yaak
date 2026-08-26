@@ -1,3 +1,4 @@
+import { i18n } from "@yaakapp-internal/i18n";
 import { useMemo } from "react";
 import { CountBadge } from "../components/core/CountBadge";
 import type { TabItem } from "../components/core/Tabs/Tabs";
@@ -22,7 +23,7 @@ export function useHeadersTab<T extends string>(
 
     const tab: TabItem = {
       value: tabValue,
-      label: label ?? "Headers",
+      label: label ?? i18n.t("request.headers"),
       rightSlot: <CountBadge count={numHeaders} />,
     };
 

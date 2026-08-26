@@ -1434,6 +1434,30 @@ async fn cmd_export_data<R: Runtime>(
     })?)
 }
 
+/// Decodes base64 and writes the bytes to a file the user picked.
+///
+/// The webview can't do this itself: its `fs` permissions are read-only and scoped to the app
+/// data directory, and widening them so it could write anywhere would be a poor trade in an app
+/// whose whole job is rendering responses from servers it doesn't control.
+///
+/// Base64 in rather than bytes for two reasons. A `Vec<u8>` crosses the IPC boundary as a JSON
+/// array of numbers, several times the size of the thing being saved. And the callers that need
+/// this — values the editor collapsed — are holding base64 already, so passing it through
+/// untouched means the save never decodes megabytes on the main thread.
+#[tauri::command]
+async fn cmd_save_base64_to_binary<R: Runtime>(
+    _app_handle: AppHandle<R>,
+    filepath: &str,
+    data: &str,
+) -> YaakResult<()> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| GenericError(format!("Data is not valid base64: {e}")))?;
+    fs::write(filepath, bytes).map_err(|e| GenericError(e.to_string()))?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn cmd_save_response<R: Runtime>(
     app_handle: AppHandle<R>,
@@ -1606,10 +1630,11 @@ async fn cmd_delete_all_http_responses<R: Runtime>(
     app_handle: AppHandle<R>,
     window: WebviewWindow<R>,
 ) -> YaakResult<()> {
-    Ok(app_handle.db().delete_all_http_responses_for_request(
+    app_handle.db().delete_all_http_responses_for_request(
         request_id,
         &UpdateSource::from_window_label(window.label()),
-    )?)
+    )?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1863,6 +1888,7 @@ pub fn run() {
             cmd_reload_plugins,
             cmd_render_template,
             cmd_restart,
+            cmd_save_base64_to_binary,
             cmd_save_response,
             cmd_send_ephemeral_request,
             cmd_send_http_request,

@@ -1,6 +1,11 @@
 import { useTranslation } from "@yaakapp-internal/i18n";
 import type { WebsocketRequest } from "@yaakapp-internal/models";
-import { patchModel } from "@yaakapp-internal/models";
+import {
+  flushAllModelWrites,
+  getModel,
+  patchModel,
+  patchModelDebounced,
+} from "@yaakapp-internal/models";
 import type { GenericCompletionOption } from "@yaakapp-internal/plugins";
 import { closeWebsocket, connectWebsocket, sendWebsocket } from "@yaakapp-internal/ws";
 import classNames from "classnames";
@@ -9,8 +14,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useMemo, useRef } from "react";
 import { getActiveCookieJar } from "../hooks/useActiveCookieJar";
 import { getActiveEnvironment } from "../hooks/useActiveEnvironment";
-import { activeRequestIdAtom } from "../hooks/useActiveRequestId";
-import { allRequestsAtom } from "../hooks/useAllRequests";
+import { allRequestUrlsAtom } from "../hooks/useAllRequests";
 import { useAuthTab } from "../hooks/useAuthTab";
 import { useCancelHttpResponse } from "../hooks/useCancelHttpResponse";
 import { useHeadersTab } from "../hooks/useHeadersTab";
@@ -19,10 +23,8 @@ import { usePinnedHttpResponse } from "../hooks/usePinnedHttpResponse";
 import { activeWebsocketConnectionAtom } from "../hooks/usePinnedWebsocketConnection";
 import { useRequestEditor, useRequestEditorEvent } from "../hooks/useRequestEditor";
 import { useRequestUpdateKey } from "../hooks/useRequestUpdateKey";
-import { deepEqualAtom } from "../lib/atoms";
 import { languageFromContentType } from "../lib/contentType";
-import { generateId } from "../lib/generateId";
-import { extractPathPlaceholders } from "../lib/pathPlaceholders";
+import { derivePathPlaceholderPairs, renamePathPlaceholder } from "../lib/pathPlaceholders";
 import { prepareImportQuerystring } from "../lib/prepareImportQuerystring";
 import { resolvedModelName } from "../lib/resolvedModelName";
 import { CountBadge } from "./core/CountBadge";
@@ -30,7 +32,6 @@ import type { GenericCompletionConfig } from "./core/Editor/genericCompletion";
 import { getUrlCompletionConfig } from "./core/Editor/url/completion";
 import { Editor } from "./core/Editor/LazyEditor";
 import { IconButton } from "./core/IconButton";
-import type { Pair } from "./core/PairEditor";
 import { PlainInput } from "./core/PlainInput";
 import type { TabItem, TabsRef } from "./core/Tabs/Tabs";
 import { setActiveTab, TabContent, Tabs } from "./core/Tabs/Tabs";
@@ -56,15 +57,12 @@ const TAB_SETTINGS = "settings";
 const TAB_DESCRIPTION = "description";
 const TABS_STORAGE_KEY = "websocket_request_tabs";
 
-const nonActiveRequestUrlsAtom = atom((get) => {
-  const activeRequestId = get(activeRequestIdAtom);
-  const requests = get(allRequestsAtom);
-  return requests
-    .filter((r) => r.id !== activeRequestId)
-    .map((r): GenericCompletionOption => ({ type: "constant", label: r.url }));
-});
-
-const memoNotActiveRequestUrlsAtom = deepEqualAtom(nonActiveRequestUrlsAtom);
+// Derived from the identity-stable URL list so this only recomputes when a URL
+// actually changes. The active request's own URL is included, but exact matches
+// are filtered out at completion time by genericCompletion.
+const requestUrlOptionsAtom = atom((get): GenericCompletionOption[] =>
+  get(allRequestUrlsAtom).map((url) => ({ type: "constant", label: url })),
+);
 
 export function WebsocketRequestPane({ style, fullHeight, className, activeRequest }: Props) {
   const { t } = useTranslation();
@@ -86,20 +84,33 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
     [],
   );
 
-  const { urlParameterPairs, urlParametersKey } = useMemo(() => {
-    const placeholderNames = extractPathPlaceholders(activeRequest.url);
-    const nonEmptyParameters = activeRequest.urlParameters.filter((p) => p.name || p.value);
-    const items: Pair[] = [...nonEmptyParameters];
-    for (const name of placeholderNames) {
-      const item = items.find((p) => p.name === name);
-      if (item) {
-        item.readOnlyName = true;
-      } else {
-        items.push({ name, value: "", enabled: true, readOnlyName: true, id: generateId() });
-      }
-    }
-    return { urlParameterPairs: items, urlParametersKey: placeholderNames.join(",") };
-  }, [activeRequest.url, activeRequest.urlParameters]);
+  // Renaming a path placeholder has to rewrite the URL and rename the parameter together, or the
+  // value detaches from the placeholder.
+  // NOTE: Reads the request fresh rather than closing over `activeRequest`. The row that calls this
+  //  holds onto it until the URL's placeholders change, so a captured request would go stale and
+  //  patch its parameter list back over newer edits.
+  const handleRenamePathPlaceholder = useCallback(
+    (oldName: string, newName: string) => {
+      const request = getModel("websocket_request", activeRequestId);
+      if (request == null) return false;
+
+      const patch = renamePathPlaceholder(request, oldName, newName);
+      if (patch == null) return false; // Unusable name, so the editor reverts the field
+      void patchModel(request, patch);
+      return true;
+    },
+    [activeRequestId],
+  );
+
+  const { urlParameterPairs, urlParametersKey } = useMemo(
+    () =>
+      derivePathPlaceholderPairs(
+        activeRequest.url,
+        activeRequest.urlParameters,
+        handleRenamePathPlaceholder,
+      ),
+    [activeRequest.url, activeRequest.urlParameters, handleRenamePathPlaceholder],
+  );
 
   const tabs = useMemo<TabItem[]>(() => {
     return [
@@ -130,7 +141,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
   const { mutate: cancelResponse } = useCancelHttpResponse(activeResponse?.id ?? null);
   const connection = useAtomValue(activeWebsocketConnectionAtom);
 
-  const autocompleteUrls = useAtomValue(memoNotActiveRequestUrlsAtom);
+  const autocompleteUrls = useAtomValue(requestUrlOptionsAtom);
 
   const autocomplete: GenericCompletionConfig = useMemo(
     () => getUrlCompletionConfig(autocompleteUrls),
@@ -138,6 +149,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
   );
 
   const handleConnect = useCallback(async () => {
+    await flushAllModelWrites(); // The backend reads the request from the DB
     await connectWebsocket({
       requestId: activeRequest.id,
       environmentId: getActiveEnvironment()?.id ?? null,
@@ -147,6 +159,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
 
   const handleSend = useCallback(async () => {
     if (connection == null) return;
+    await flushAllModelWrites(); // The backend reads the message from the DB
     await sendWebsocket({
       connectionId: connection?.id,
       environmentId: getActiveEnvironment()?.id ?? null,
@@ -159,7 +172,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
   }, [connection]);
 
   const handleUrlChange = useCallback(
-    (url: string) => patchModel(activeRequest, { url }),
+    (url: string) => patchModelDebounced(activeRequest, { url }),
     [activeRequest],
   );
 
@@ -243,7 +256,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                 forceUpdateKey={forceUpdateKey}
                 headers={activeRequest.headers}
                 stateKey={`headers.${activeRequest.id}`}
-                onChange={(headers) => patchModel(activeRequest, { headers })}
+                onChange={(headers) => patchModelDebounced(activeRequest, { headers })}
               />
             </TabContent>
             <TabContent value={TAB_PARAMS}>
@@ -251,7 +264,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                 stateKey={`params.${activeRequest.id}`}
                 forceUpdateKey={forceUpdateKey + urlParametersKey}
                 pairs={urlParameterPairs}
-                onChange={(urlParameters) => patchModel(activeRequest, { urlParameters })}
+                onChange={(urlParameters) => patchModelDebounced(activeRequest, { urlParameters })}
               />
             </TabContent>
             <TabContent value={TAB_MESSAGE}>
@@ -263,7 +276,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                 heightMode={fullHeight ? "full" : "auto"}
                 defaultValue={activeRequest.message}
                 language={messageLanguage}
-                onChange={(message) => patchModel(activeRequest, { message })}
+                onChange={(message) => patchModelDebounced(activeRequest, { message })}
                 stateKey={`json.${activeRequest.id}`}
               />
             </TabContent>
@@ -280,7 +293,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                   className="font-sans text-xl! px-0!"
                   containerClassName="border-0"
                   placeholder={resolvedModelName(activeRequest)}
-                  onChange={(name) => patchModel(activeRequest, { name })}
+                  onChange={(name) => patchModelDebounced(activeRequest, { name })}
                 />
                 <MarkdownEditor
                   name="request-description"
@@ -288,7 +301,7 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
                   defaultValue={activeRequest.description}
                   stateKey={`description.${activeRequest.id}`}
                   forceUpdateKey={forceUpdateKey}
-                  onChange={(description) => patchModel(activeRequest, { description })}
+                  onChange={(description) => patchModelDebounced(activeRequest, { description })}
                 />
               </div>
             </TabContent>
