@@ -48,7 +48,7 @@ pub enum Commands {
     /// Import API data from Yaak, OpenAPI, Postman, Insomnia, Swagger, or cURL
     Import(ImportArgs),
 
-    /// Export Yaak workspace data
+    /// Export Yaak workspace JSON, or a folder as Postman / OpenAPI
     Export(ExportArgs),
 
     /// Plugin development and publishing commands
@@ -210,9 +210,15 @@ pub struct ImportArgs {
     pub workspace_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CollectionExportFormat {
+    Postman,
+    Openapi,
+}
+
 #[derive(Args)]
 pub struct ExportArgs {
-    /// Path to write the Yaak export JSON file
+    /// Path to write the export JSON file
     pub file: PathBuf,
 
     /// Workspace IDs to export (defaults to the only workspace when exactly one exists)
@@ -226,6 +232,18 @@ pub struct ExportArgs {
     /// Include private environments in the export
     #[arg(long)]
     pub include_private_environments: bool,
+
+    /// Export a single folder instead of workspace JSON
+    #[arg(
+        long = "folder-id",
+        value_name = "FOLDER_ID",
+        conflicts_with_all = ["workspace_ids", "all", "include_private_environments"]
+    )]
+    pub folder_id: Option<String>,
+
+    /// Format when using --folder-id (postman or openapi)
+    #[arg(long, value_enum, requires = "folder_id")]
+    pub format: Option<CollectionExportFormat>,
 }
 
 #[derive(Args)]

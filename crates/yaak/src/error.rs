@@ -16,6 +16,9 @@ pub enum Error {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Invalid export format '{0}'. Use postman or openapi")]
+    InvalidExportFormat(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

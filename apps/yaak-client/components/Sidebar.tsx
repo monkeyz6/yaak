@@ -41,6 +41,7 @@ import {
 } from "../hooks/useActiveWorkspace";
 import { allRequestsAtom } from "../hooks/useAllRequests";
 import { getCreateDropdownItems } from "../hooks/useCreateDropdownItems";
+import { useExportFolder } from "../hooks/useExportFolder";
 import { getFolderActions } from "../hooks/useFolderActions";
 import { getGrpcRequestActions } from "../hooks/useGrpcRequestActions";
 import { useHotKey } from "../hooks/useHotKey";
@@ -107,6 +108,7 @@ const OPACITY_SUBTLE = "opacity-80";
 
 function Sidebar({ className }: { className?: string }) {
   const { t } = useTranslation();
+  const exportFolder = useExportFolder();
   const [hidden, setHidden] = useSidebarHidden();
   const activeWorkspaceId = useAtomValue(activeWorkspaceAtom)?.id;
   const treeId = `tree.${activeWorkspaceId ?? "unknown"}`;
@@ -426,6 +428,15 @@ function Sidebar({ className }: { className?: string }) {
           onSelect: () => openFolderSettings(child.id),
         },
         {
+          label: t("contextMenu.exportFolder"),
+          hidden: !(items.length === 1 && child.model === "folder"),
+          leftSlot: <Icon icon="folder_output" />,
+          onSelect: () => {
+            const model = getModel("folder", child.id);
+            if (model != null) exportFolder.mutate(model);
+          },
+        },
+        {
           label: t("contextMenu.send"),
           hotKeyAction: "request.send",
           hotKeyLabelOnly: true,
@@ -539,7 +550,7 @@ function Sidebar({ className }: { className?: string }) {
       ];
       return menuItems;
     },
-    [t],
+    [exportFolder, t],
   );
 
   const renderContextMenuFn = useCallback<

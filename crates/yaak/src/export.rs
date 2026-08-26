@@ -4,6 +4,10 @@ use std::path::Path;
 use yaak_models::query_manager::QueryManager;
 use yaak_models::util::get_workspace_export_resources;
 
+pub use crate::export_folder::{
+    CollectionFormat, ExportFolderParams, ExportFolderResult, SkipReason, SkippedItem, export_folder,
+};
+
 pub struct ExportDataParams<'a> {
     pub query_manager: &'a QueryManager,
     pub yaak_version: &'a str,

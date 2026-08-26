@@ -29,7 +29,7 @@ use tauri_plugin_log::{Builder, Target, TargetKind, log};
 use tokio::sync::Mutex;
 use tokio::task::block_in_place;
 use tokio::time;
-use yaak::export::{self, ExportDataParams};
+use yaak::export::{self, CollectionFormat, ExportDataParams, ExportFolderParams, ExportFolderResult};
 use yaak_common::command::new_checked_command;
 use yaak_crypto::manager::EncryptionManager;
 use yaak_grpc::manager::{GrpcConfig, GrpcHandle};
@@ -1434,6 +1434,21 @@ async fn cmd_export_data<R: Runtime>(
     })?)
 }
 
+#[tauri::command]
+async fn cmd_export_folder<R: Runtime>(
+    app_handle: AppHandle<R>,
+    folder_id: &str,
+    format: &str,
+    export_path: &str,
+) -> YaakResult<ExportFolderResult> {
+    Ok(export::export_folder(ExportFolderParams {
+        query_manager: &app_handle.db_manager(),
+        folder_id,
+        format: CollectionFormat::parse(format)?,
+        export_path: Path::new(export_path),
+    })?)
+}
+
 /// Decodes base64 and writes the bytes to a file the user picked.
 ///
 /// The webview can't do this itself: its `fs` permissions are read-only and scoped to the app
@@ -1863,6 +1878,7 @@ pub fn run() {
             cmd_delete_send_history,
             cmd_dismiss_notification,
             cmd_export_data,
+            cmd_export_folder,
             cmd_send_feedback,
             cmd_http_request_body,
             cmd_http_response_body,

@@ -1,9 +1,9 @@
-use crate::cli::{ExportArgs, ImportArgs};
+use crate::cli::{CollectionExportFormat, ExportArgs, ImportArgs};
 use crate::context::CliContext;
 use crate::utils::workspace::resolve_workspace_id;
 use std::fs;
 use std::io::ErrorKind;
-use yaak::export::{self, ExportDataParams};
+use yaak::export::{self, CollectionFormat, ExportDataParams, ExportFolderParams};
 use yaak::import;
 use yaak_core::WorkspaceContext;
 use yaak_models::util::BatchUpsertResult;
@@ -25,6 +25,16 @@ pub async fn run_import(ctx: &CliContext, args: ImportArgs) -> i32 {
 }
 
 pub fn run_export(ctx: &CliContext, args: ExportArgs) -> i32 {
+    if args.folder_id.is_some() {
+        return match export_folder(ctx, args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                1
+            }
+        };
+    }
+
     match export(ctx, args) {
         Ok(count) => {
             println!("Exported {count} workspace(s)");
@@ -68,6 +78,45 @@ async fn import(ctx: &CliContext, args: ImportArgs) -> CommandResult<BatchUpsert
     let imported = import::import_resources(ctx.query_manager(), workspace_context, resources)
         .map_err(|e| format!("Failed to import data: {e}"))?;
     Ok(imported)
+}
+
+fn export_folder(ctx: &CliContext, args: ExportArgs) -> CommandResult {
+    let folder_id = args
+        .folder_id
+        .as_deref()
+        .ok_or_else(|| "--folder-id is required for folder export".to_string())?;
+    let format = match args.format {
+        Some(CollectionExportFormat::Postman) => CollectionFormat::Postman,
+        Some(CollectionExportFormat::Openapi) => CollectionFormat::Openapi,
+        None => {
+            return Err("--format is required when using --folder-id (postman or openapi)".to_string());
+        }
+    };
+
+    ctx.db()
+        .get_folder(folder_id)
+        .map_err(|e| format!("Failed to get folder '{folder_id}': {e}"))?;
+
+    let result = export::export_folder(ExportFolderParams {
+        query_manager: ctx.query_manager(),
+        folder_id,
+        format,
+        export_path: &args.file,
+    })
+    .map_err(|e| format!("Failed to export folder: {e}"))?;
+
+    println!(
+        "Exported {} HTTP request{}",
+        result.exported_count,
+        if result.exported_count == 1 { "" } else { "s" }
+    );
+    if !result.skipped.is_empty() {
+        eprintln!("Skipped {}:", result.skipped.len());
+        for item in result.skipped {
+            eprintln!("  - {} ({}): {}", item.name, item.id, item.reason.as_str());
+        }
+    }
+    Ok(())
 }
 
 fn export(ctx: &CliContext, args: ExportArgs) -> CommandResult<usize> {

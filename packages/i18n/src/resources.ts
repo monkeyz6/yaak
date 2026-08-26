@@ -667,6 +667,7 @@ export const en = {
     restoreConfirmMany: "This will discard uncommitted changes for {{count}} selected items.",
     restore: "Restore",
     sendAll: "Send All",
+    exportFolder: "Export…",
   },
   hotkeys: {
     actions: {
@@ -937,6 +938,21 @@ export const en = {
     importing: "Importing",
     importCurl: "Import Curl",
     importCurlFromClipboard: "Import Curl command from clipboard",
+    export: "Export",
+    exportFolderTitle: "Export Folder",
+    exportFolderDescription: "Export HTTP requests in “{{name}}”",
+    formatPostman: "Postman Collection v2.1",
+    formatPostmanHelp: "Keeps folder hierarchy so teammates can import and send requests.",
+    formatOpenapi: "OpenAPI 3.0",
+    formatOpenapiHelp: "Maps folders to tags. Paths come from the real request URLs.",
+    exportFolderSuccess: "Exported {{count}} HTTP request(s)",
+    exportFolderSuccessWithSkipped:
+      "Exported {{count}} HTTP request(s). Skipped {{skipped}}: {{details}}",
+    skipGrpc: "gRPC is not supported",
+    skipWebsocket: "WebSocket is not supported",
+    skipTemplateFunction: "contains template function",
+    skipUnsupportedAuth: "authentication cannot be mapped",
+    skipDuplicatePathMethod: "duplicate path and method",
   },
   updates: {
     installedTitle: "Yaak {{version}} was installed",
@@ -1925,6 +1941,7 @@ export const zhCN = {
     restoreConfirmMany: "这将丢弃 {{count}} 个所选项目的未提交更改。",
     restore: "还原",
     sendAll: "全部发送",
+    exportFolder: "导出…",
   },
   hotkeys: {
     actions: {
@@ -2184,6 +2201,21 @@ export const zhCN = {
     importing: "导入中",
     importCurl: "导入 Curl",
     importCurlFromClipboard: "从剪贴板导入 Curl 命令",
+    export: "导出",
+    exportFolderTitle: "导出文件夹",
+    exportFolderDescription: "导出「{{name}}」下的 HTTP 接口",
+    formatPostman: "Postman Collection v2.1",
+    formatPostmanHelp: "保留文件夹层级，方便同事导入后继续发请求。",
+    formatOpenapi: "OpenAPI 3.0",
+    formatOpenapiHelp: "用 tags 对应文件夹。路径仍来自真实 URL。",
+    exportFolderSuccess: "已导出 {{count}} 条 HTTP 请求",
+    exportFolderSuccessWithSkipped:
+      "已导出 {{count}} 条 HTTP 请求。跳过 {{skipped}} 条：{{details}}",
+    skipGrpc: "不支持 gRPC",
+    skipWebsocket: "不支持 WebSocket",
+    skipTemplateFunction: "包含模板函数",
+    skipUnsupportedAuth: "认证无法映射",
+    skipDuplicatePathMethod: "路径和方法重复",
   },
   updates: {
     installedTitle: "Yaak {{version}} 已安装",
