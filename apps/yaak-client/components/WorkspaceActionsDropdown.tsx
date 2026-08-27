@@ -15,6 +15,7 @@ import {
 } from "../hooks/useActiveWorkspace";
 import { useCreateWorkspace } from "../hooks/useCreateWorkspace";
 import { useDeleteSendHistory } from "../hooks/useDeleteSendHistory";
+import { usePruneHttpResponseHistory } from "../hooks/usePruneHttpResponseHistory";
 import { useWorkspaceActions } from "../hooks/useWorkspaceActions";
 import { showDialog } from "../lib/dialog";
 import { importData } from "../lib/importData";
@@ -41,6 +42,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
   const createWorkspace = useCreateWorkspace();
   const workspaceMeta = useAtomValue(activeWorkspaceMetaAtom);
   const { mutate: deleteSendHistory } = useDeleteSendHistory();
+  const { mutate: pruneHttpResponseHistory } = usePruneHttpResponseHistory();
   const workspaceActions = useWorkspaceActions();
 
   const openCloneGitRepositoryDialog = useCallback(() => {
@@ -126,6 +128,12 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
         },
       },
       {
+        label: t("workspace.pruneHttpHistory"),
+        color: "warning",
+        leftSlot: <Icon icon="list_x" />,
+        onSelect: pruneHttpResponseHistory,
+      },
+      {
         label: t("workspace.clearSendHistory"),
         color: "warning",
         leftSlot: <Icon icon="history" />,
@@ -138,6 +146,7 @@ export const WorkspaceActionsDropdown = memo(function WorkspaceActionsDropdown({
     workspaces,
     workspaceMeta,
     deleteSendHistory,
+    pruneHttpResponseHistory,
     createWorkspace,
     openCloneGitRepositoryDialog,
     t,

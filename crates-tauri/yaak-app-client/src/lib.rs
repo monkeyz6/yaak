@@ -1640,6 +1640,22 @@ async fn cmd_delete_send_history<R: Runtime>(
 }
 
 #[tauri::command]
+async fn cmd_prune_http_responses<R: Runtime>(
+    workspace_id: &str,
+    keep_ids: Vec<String>,
+    app_handle: AppHandle<R>,
+    window: WebviewWindow<R>,
+) -> YaakResult<usize> {
+    let blobs = app_handle.blob_manager();
+    Ok(app_handle.db().prune_http_responses_for_workspace(
+        workspace_id,
+        &keep_ids,
+        &UpdateSource::from_window_label(window.label()),
+        &blobs,
+    )?)
+}
+
+#[tauri::command]
 async fn cmd_delete_all_http_responses<R: Runtime>(
     request_id: &str,
     app_handle: AppHandle<R>,
@@ -1876,6 +1892,7 @@ pub fn run() {
             cmd_delete_all_grpc_connections,
             cmd_delete_all_http_responses,
             cmd_delete_send_history,
+            cmd_prune_http_responses,
             cmd_dismiss_notification,
             cmd_export_data,
             cmd_export_folder,
