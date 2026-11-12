@@ -1,4 +1,3 @@
-import { readDir } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import { Banner, VStack } from "@yaakapp-internal/ui";
 import { useState } from "react";
@@ -7,6 +6,7 @@ import { Button } from "./core/Button";
 import { Checkbox } from "./core/Checkbox";
 import { SettingRowBoolean, SettingRowDirectory } from "./core/SettingRow";
 import { SelectFile } from "./SelectFile";
+import { platform } from "@yaakapp-internal/platform";
 
 export interface SyncToFilesystemSettingProps {
   layout?: "form" | "settings";
@@ -26,7 +26,7 @@ export function SyncToFilesystemSetting({
 
   const handleFilePathChange = async (filePath: string | null) => {
     if (filePath != null) {
-      const files = await readDir(filePath);
+      const files = await platform.files.readDir(filePath);
       if (files.length > 0) {
         setSyncDir(filePath);
         return;

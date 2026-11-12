@@ -1,4 +1,3 @@
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { patchModel, settingsAtom } from "@yaakapp-internal/models";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import { Heading, VStack } from "@yaakapp-internal/ui";
@@ -10,6 +9,7 @@ import { CargoFeature } from "../CargoFeature";
 import { CommercialUseBanner } from "../CommercialUseBanner";
 import { DismissibleBanner } from "../core/DismissibleBanner";
 import { IconButton } from "../core/IconButton";
+import { platform } from "@yaakapp-internal/platform";
 import {
   ModelSettingRowBoolean,
   ModelSettingSelectControl,
@@ -146,7 +146,7 @@ export function SettingsGeneral() {
                 {
                   title: revealInFinderText,
                   icon: "folder_open",
-                  onClick: () => revealItemInDir(appInfo.appDataDir),
+                  onClick: () => platform.revealItemInDir(appInfo.appDataDir),
                 },
               ]}
             />
@@ -162,7 +162,7 @@ export function SettingsGeneral() {
                 {
                   title: revealInFinderText,
                   icon: "folder_open",
-                  onClick: () => revealItemInDir(appInfo.appLogDir),
+                  onClick: () => platform.revealItemInDir(appInfo.appLogDir),
                 },
               ]}
             />

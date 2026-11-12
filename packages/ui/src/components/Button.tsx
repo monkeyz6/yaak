@@ -5,7 +5,7 @@ import { forwardRef } from "react";
 import { Icon } from "./Icon";
 import { LoadingIcon } from "./LoadingIcon";
 
-type ButtonVariant = "border" | "solid";
+type ButtonVariant = "border" | "solid" | "input";
 type ButtonSize = "2xs" | "xs" | "sm" | "md" | "auto";
 
 export type ButtonProps = Omit<HTMLAttributes<HTMLButtonElement>, "color" | "onChange"> & {
@@ -17,6 +17,8 @@ export type ButtonProps = Omit<HTMLAttributes<HTMLButtonElement>, "color" | "onC
   size?: ButtonSize;
   justify?: "start" | "center";
   type?: "button" | "submit";
+  /** Submit a form the button is not inside, by that form's id */
+  form?: string;
   forDropdown?: boolean;
   disabled?: boolean;
   title?: string;
@@ -88,6 +90,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
           resolvedColor !== "custom" &&
           "border-border-subtle text-text-subtle enabled:hocus:border-border " +
             "enabled:hocus:bg-surface-highlight enabled:hocus:text-text outline-border-subtler",
+        // Chrome of a form input rather than a button: no hover state, and colors resolve from the
+        // surrounding x-theme-input rather than a button theme.
+        variant === "input" && "border-border text-text",
       )}
       disabled={isDisabled}
       onClick={onClick}

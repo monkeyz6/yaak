@@ -6,20 +6,17 @@ use crate::error::Result;
 use crate::models_ext::{BlobManagerExt, QueryManagerExt};
 use chrono::Utc;
 use log::warn;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tauri::ipc::Channel;
-use tauri::{AppHandle, Listener, Runtime, command};
+use tauri::{AppHandle, Listener, Runtime};
 use tokio::sync::watch;
-use ts_rs::TS;
+use yaak_rpc_schema::WatchResult;
 use yaak_sync::error::Error::InvalidSyncDirectory;
 use yaak_sync::sync::{
-    FsCandidate, SyncOp, apply_sync_ops, apply_sync_state_ops, compute_sync_ops, get_db_candidates,
-    get_fs_candidates,
+    FsCandidate, SyncOp, apply_db_sync_ops, apply_fs_sync_ops, apply_sync_state_ops,
+    compute_sync_ops, get_db_candidates, get_fs_candidates,
 };
 use yaak_sync::watch::{WatchEvent, watch_directory};
 
-#[command]
 pub(crate) async fn cmd_sync_calculate<R: Runtime>(
     app_handle: AppHandle<R>,
     workspace_id: &str,
@@ -32,7 +29,7 @@ pub(crate) async fn cmd_sync_calculate<R: Runtime>(
     let db = app_handle.db();
     let version = app_handle.package_info().version.to_string();
     let db_candidates = get_db_candidates(&db, &version, workspace_id, sync_dir)?;
-    let fs_candidates = get_fs_candidates(sync_dir)?
+    let fs_candidates = get_fs_candidates(sync_dir, &db_candidates)?
         .into_iter()
         // Only keep items in the same workspace
         .filter(|fs| fs.model.workspace_id() == workspace_id)
@@ -40,51 +37,41 @@ pub(crate) async fn cmd_sync_calculate<R: Runtime>(
     Ok(compute_sync_ops(db_candidates, fs_candidates))
 }
 
-#[command]
 pub(crate) async fn cmd_sync_calculate_fs(dir: &Path) -> Result<Vec<SyncOp>> {
     let db_candidates = Vec::new();
-    let fs_candidates = get_fs_candidates(dir)?;
+    let fs_candidates = get_fs_candidates(dir, &db_candidates)?;
     Ok(compute_sync_ops(db_candidates, fs_candidates))
 }
 
-#[command]
 pub(crate) async fn cmd_sync_apply<R: Runtime>(
     app_handle: AppHandle<R>,
     sync_ops: Vec<SyncOp>,
     sync_dir: &Path,
     workspace_id: &str,
 ) -> Result<()> {
-    let db = app_handle.db();
+    // Files first, so the write transaction never waits on the filesystem
+    let pending = apply_fs_sync_ops(workspace_id, sync_dir, sync_ops)?;
     let blobs = app_handle.blob_manager();
-    let sync_state_ops = apply_sync_ops(&db, &blobs, workspace_id, sync_dir, sync_ops)?;
-    apply_sync_state_ops(&db, workspace_id, sync_dir, sync_state_ops)?;
-    Ok(())
+    app_handle.db_manager().with_tx(|tx| {
+        let sync_state_ops = apply_db_sync_ops(tx, &blobs, workspace_id, sync_dir, pending)?;
+        apply_sync_state_ops(tx, workspace_id, sync_dir, sync_state_ops)?;
+        Ok(())
+    })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "index.ts")]
-pub(crate) struct WatchResult {
-    unlisten_event: String,
-}
-
-#[command]
-pub(crate) async fn cmd_sync_watch<R: Runtime>(
+pub(crate) async fn sync_watch<R, F>(
     app_handle: AppHandle<R>,
     sync_dir: &Path,
     workspace_id: &str,
-    channel: Channel<WatchEvent>,
-) -> Result<WatchResult> {
+    on_event: F,
+) -> Result<WatchResult>
+where
+    R: Runtime,
+    F: Fn(WatchEvent) + Send + Sync + 'static,
+{
     let (cancel_tx, cancel_rx) = watch::channel(());
 
-    // Create a callback that forwards events to the Tauri channel
-    let callback = move |event: WatchEvent| {
-        if let Err(e) = channel.send(event) {
-            warn!("Failed to send watch event: {:?}", e);
-        }
-    };
-
-    watch_directory(&sync_dir, callback, cancel_rx).await?;
+    watch_directory(&sync_dir, on_event, cancel_rx).await?;
 
     let app_handle_inner = app_handle.clone();
     let unlisten_event =

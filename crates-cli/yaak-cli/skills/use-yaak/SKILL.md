@@ -1,19 +1,12 @@
 ---
 name: use-yaak
 description: >
-  Build and run HTTP API requests with the Yaak CLI (`yaak`): create workspaces,
-  folders, environments and variables, author HTTP requests, configure
-  authentication (OAuth 2.0, bearer tokens, API keys, basic, JWT, AWS SigV4),
-  send them individually or a whole folder/workspace at once, chain one
-  request's response into the next, and import existing APIs from OpenAPI,
-  Postman, Insomnia, or cURL. Use this skill whenever the user mentions Yaak, a
-  Yaak workspace, or the `yaak` command, and also when they ask to try, hit,
-  call, exercise, or smoke test an HTTP or REST endpoint, to save or organize
-  API requests for reuse, to set up API requests for manual testing, to add auth
-  to a saved request, to turn an OpenAPI or Postman collection into runnable
-  requests, or to run a saved request suite against staging versus production.
-  Prefer this over one-off `curl` commands whenever the requests should be
-  saved, reused, shared, or run as a set.
+  Use when the user mentions Yaak, a Yaak workspace, or the `yaak` command, or
+  asks to call, hit, or smoke test HTTP/REST endpoints, save or organize API
+  requests for reuse or manual testing, configure auth on saved requests, import
+  an OpenAPI spec, a Postman, Insomnia, or Bruno collection, or a cURL command, or run
+  saved requests across environments. Prefer over one-off `curl` when requests
+  should be saved, reused, shared, or run as a set.
 allowed-tools: Bash(yaak:*), Bash(which:*), Bash(command:*), Bash(npm:*), Bash(npx:*)
 ---
 
@@ -105,9 +98,9 @@ re-run it after acting.
 
 ## Core workflows
 
-**Start from a spec when one exists.** `yaak import <file>` auto-detects OpenAPI,
-Swagger, Postman, Insomnia, cURL, and Yaak exports, and beats authoring requests
-by hand every time.
+**Start from a spec when one exists.** `yaak import <path>` auto-detects OpenAPI,
+Swagger, Postman, Insomnia, Bruno, cURL, and Yaak exports, and beats authoring requests
+by hand every time. Bruno collections can also be imported from a ZIP or directory.
 
 **Make the host swappable.** Put the base URL in a base-environment variable,
 reference it as `${[ base_url ]}`, then add a sub-environment per deployment
@@ -170,3 +163,6 @@ check the status.
 5. Never write a real secret into an environment variable on the user's behalf.
    Reference one and let them fill in the value.
 6. Verify what you built by sending it, and report the real HTTP status.
+7. If the CLI warns on stderr that a newer version is available, offer to run
+   the upgrade command it prints, then re-run `yaak agent install` so this
+   skill updates too.

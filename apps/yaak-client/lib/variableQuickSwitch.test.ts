@@ -1,5 +1,8 @@
 import type { EnvironmentVariable } from "@yaakapp-internal/models";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The encryption helpers pull in the platform host, which needs a real window
+vi.mock("@yaakapp-internal/platform", () => ({ platform: {} }));
 import {
   MAX_PINNED,
   isEncrypted,

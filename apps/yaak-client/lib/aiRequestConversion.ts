@@ -1,4 +1,4 @@
-import { parse as jsonLintParse } from "@prantlf/jsonlint";
+import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 
 export type AiRequestFormat = "anthropic_messages" | "openai_chat_completions" | "openai_responses";
 
@@ -38,12 +38,20 @@ export interface ParsedAiRequestBody {
 export function parseAiRequestBody(text: string): ParsedAiRequestBody {
   const masked = maskBareTemplateValues(text);
   return {
-    body: jsonLintParse(masked.text, {
-      mode: "cjson",
-      ignoreTrailingCommas: true,
-    }),
+    body: parseLenientJson(masked.text),
     templates: masked.templates,
   };
+}
+
+/** Parse JSON that may contain comments or trailing commas, throwing on anything else invalid. */
+function parseLenientJson(text: string): unknown {
+  const errors: ParseError[] = [];
+  const value = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false });
+  const first = errors[0];
+  if (first != null) {
+    throw new SyntaxError(`${printParseErrorCode(first.error)} at offset ${first.offset}`);
+  }
+  return value;
 }
 
 export function stringifyAiRequestBody(
@@ -83,7 +91,7 @@ function maskBareTemplateValues(text: string): {
   };
   let output = "";
 
-  for (let offset = 0; offset < text.length; ) {
+  for (let offset = 0; offset < text.length;) {
     if (text.startsWith("${[", offset) && !isEscapedTemplateStart(text, offset)) {
       const end = findTemplateEnd(text, offset + 3);
       if (end != null) {

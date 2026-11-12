@@ -136,13 +136,11 @@ export function HttpAuthenticationEditor({ model }: Props) {
           />
           {authConfig.data?.actions && authConfig.data.actions.length > 0 && (
             <Dropdown
-              items={authConfig.data.actions.map(
-                (a): DropdownItem => ({
-                  label: a.label,
-                  leftSlot: a.icon ? <Icon icon={a.icon} /> : null,
-                  onSelect: () => a.call(model),
-                }),
-              )}
+              items={authConfig.data.actions.map((a): DropdownItem => ({
+                label: a.label,
+                leftSlot: a.icon ? <Icon icon={a.icon} /> : null,
+                onSelect: () => a.call(model),
+              }))}
             >
               <IconButton
                 title={t("response.authenticationActions")}

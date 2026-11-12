@@ -2,9 +2,11 @@
 resolver = "2"
 members = [
   "crates/yaak",
+  "crates/yaak-commands",
   # Common/foundation crates
   "crates/common/yaak-database",
   "crates/common/yaak-rpc",
+  "crates/common/yaak-rpc-schema",
   # Shared crates (no Tauri dependency)
   "crates/yaak-core",
   "crates/yaak-common",
@@ -12,6 +14,7 @@ members = [
   "crates/yaak-git",
   "crates/yaak-grpc",
   "crates/yaak-http",
+  "crates/yaak-lifecycle",
   "crates/yaak-models",
   "crates/yaak-plugins",
   "crates/yaak-sse",
@@ -19,10 +22,14 @@ members = [
   "crates/yaak-templates",
   "crates/yaak-tls",
   "crates/yaak-ws",
+  "crates/yaak-wasm",
   "crates/yaak-api",
   "crates/yaak-proxy",
   # Proxy-specific crates
   "crates-proxy/yaak-proxy-lib",
+  # Server crates (the browser tier's hosted send executor)
+  "crates-server/yaak-web",
+  "crates-server/yaak-playground",
   # CLI crates
   "crates-cli/yaak-cli",
   # Tauri-specific crates
@@ -41,7 +48,14 @@ chrono = "0.4.42"
 hex = "0.4.3"
 keyring = "3.6.3"
 log = "0.4.29"
-reqwest = "0.12.20"
+reqwest = { version = "0.13.5", default-features = false, features = [
+  # reqwest 0.13 switched `default-tls` from native-tls to rustls; keep the
+  # rest of the old default set and stay on native-tls.
+  "charset",
+  "http2",
+  "system-proxy",
+  "native-tls",
+] }
 rustls = { version = "0.23.34", default-features = false }
 rustls-platform-verifier = "0.6.2"
 schemars = { version = "0.8.22", features = ["chrono"] }
@@ -63,15 +77,18 @@ ts-rs = "11.1.0"
 # Internal crates - common/foundation
 yaak-database = { path = "crates/common/yaak-database" }
 yaak-rpc = { path = "crates/common/yaak-rpc" }
+yaak-rpc-schema = { path = "crates/common/yaak-rpc-schema" }
 
 # Internal crates - shared
 yaak-core = { path = "crates/yaak-core" }
 yaak = { path = "crates/yaak" }
+yaak-commands = { path = "crates/yaak-commands" }
 yaak-common = { path = "crates/yaak-common" }
 yaak-crypto = { path = "crates/yaak-crypto" }
 yaak-git = { path = "crates/yaak-git" }
 yaak-grpc = { path = "crates/yaak-grpc" }
 yaak-http = { path = "crates/yaak-http" }
+yaak-lifecycle = { path = "crates/yaak-lifecycle" }
 yaak-models = { path = "crates/yaak-models" }
 yaak-plugins = { path = "crates/yaak-plugins" }
 yaak-sse = { path = "crates/yaak-sse" }

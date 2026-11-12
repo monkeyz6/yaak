@@ -1,9 +1,10 @@
+import { platform } from "@yaakapp-internal/platform";
 import { createFastMutation } from "../hooks/useFastMutation";
 import { getRecentCookieJars } from "../hooks/useRecentCookieJars";
 import { getRecentEnvironments } from "../hooks/useRecentEnvironments";
 import { getRecentRequests } from "../hooks/useRecentRequests";
 import { router } from "../lib/router";
-import { invokeCmd } from "../lib/tauri";
+import { rpc } from "../lib/rpc";
 
 export const switchWorkspace = createFastMutation<
   void,
@@ -24,13 +25,15 @@ export const switchWorkspace = createFastMutation<
       request_id: requestId,
     };
 
-    if (inNewWindow) {
+    // A host without windows opens the workspace here instead. Refusing would
+    // strand the user on the workspace they were trying to leave.
+    if (inNewWindow && platform.capabilities.multiWindow) {
       const location = router.buildLocation({
         to: "/workspaces/$workspaceId",
         params: { workspaceId },
         search,
       });
-      await invokeCmd<void>("cmd_new_main_window", { url: location.href });
+      await rpc<void>("cmd_new_main_window", { url: location.href });
       return;
     }
 

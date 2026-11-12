@@ -13,7 +13,7 @@ import { Button } from "./core/Button";
 import { IconButton } from "./core/IconButton";
 import { PillButton } from "./core/PillButton";
 import { EnvironmentActionsDropdown } from "./EnvironmentActionsDropdown";
-import { ImportCurlButton } from "./ImportCurlButton";
+import { ImportCurl } from "./ImportCurl";
 import { LicenseBadge } from "./LicenseBadge";
 import { RecentRequestsDropdown } from "./RecentRequestsDropdown";
 import { SettingsDropdown } from "./SettingsDropdown";
@@ -72,7 +72,7 @@ export const WorkspaceHeader = memo(function WorkspaceHeader({
         <RecentRequestsDropdown />
       </div>
       <div className="flex-1 flex gap-1 items-center h-full justify-end pointer-events-none pr-1">
-        <ImportCurlButton />
+        <ImportCurl />
         {showEncryptionSetup ? (
           <PillButton color="danger" onClick={setupOrConfigureEncryption}>
             {t("workspace.enterEncryptionKey")}

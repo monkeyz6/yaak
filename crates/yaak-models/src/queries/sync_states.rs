@@ -1,7 +1,8 @@
-use crate::client_db::ClientDb;
+use crate::client_db::{ClientDb, WriteDb};
 use crate::error::Result;
 use crate::models::{SyncState, SyncStateIden, UpsertModelInfo};
 use crate::util::UpdateSource;
+use sea_query::ExprTrait;
 use sea_query::{Asterisk, Cond, Expr, Query, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 use std::path::Path;
@@ -9,10 +10,6 @@ use std::path::Path;
 impl<'a> ClientDb<'a> {
     pub fn get_sync_state(&self, id: &str) -> Result<SyncState> {
         self.find_one(SyncStateIden::Id, id)
-    }
-
-    pub fn upsert_sync_state(&self, sync_state: &SyncState) -> Result<SyncState> {
-        self.upsert(sync_state, &UpdateSource::Sync)
     }
 
     pub fn list_sync_states_for_workspace(
@@ -32,6 +29,12 @@ impl<'a> ClientDb<'a> {
         let mut stmt = self.conn().prepare(sql.as_str())?;
         let items = stmt.query_map(&*params.as_params(), SyncState::from_row)?;
         Ok(items.map(|v| v.unwrap()).collect())
+    }
+}
+
+impl<'a> WriteDb<'a> {
+    pub fn upsert_sync_state(&self, sync_state: &SyncState) -> Result<SyncState> {
+        self.upsert(sync_state, &UpdateSource::Sync)
     }
 
     pub fn delete_sync_state(&self, sync_state: &SyncState) -> Result<SyncState> {

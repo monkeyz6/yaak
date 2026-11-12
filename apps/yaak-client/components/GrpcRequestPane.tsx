@@ -135,6 +135,8 @@ export function GrpcRequestPane({
     onSend({ message: activeRequest.message });
   }, [activeRequest, onSend]);
 
+  const hasDescription = activeRequest.description.trim().length > 0;
+
   const tabs: TabItem[] = useMemo(
     () => [
       { value: TAB_MESSAGE, label: t("grpc.message") },
@@ -148,10 +150,10 @@ export function GrpcRequestPane({
       {
         value: TAB_DESCRIPTION,
         label: t("request.info"),
-        rightSlot: activeRequest.description && <CountBadge count={true} />,
+        rightSlot: hasDescription && <CountBadge count={true} />,
       },
     ],
-    [activeRequest.description, authTab, metadataTab, numSettingsOverrides, t],
+    [authTab, hasDescription, metadataTab, numSettingsOverrides, t],
   );
 
   const handleMetadataChange = useCallback(
@@ -196,13 +198,6 @@ export function GrpcRequestPane({
               type: "default",
               shortLabel: o.label,
             }))}
-            itemsAfter={[
-              {
-                label: t("errors.refresh"),
-                type: "default",
-                leftSlot: <Icon size="sm" icon="refresh" />,
-              },
-            ]}
           >
             <Button
               size="sm"

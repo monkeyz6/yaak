@@ -2,32 +2,27 @@ use crate::error::{Error, Result};
 use chrono::Utc;
 use log::{debug, error, warn};
 use notify::Watcher;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
-use tauri::ipc::Channel;
 use tauri::{AppHandle, Listener, Runtime};
 use tokio::select;
 use tokio::sync::watch;
 use tokio::time::sleep;
-use ts_rs::TS;
 use yaak_git::{GitWorktreeStatus, git_path_is_ignored, git_repository_paths, git_worktree_status};
+use yaak_rpc_schema::GitWatchResult;
 
 const GIT_STATUS_COALESCE_WINDOW: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "index.ts")]
-pub(crate) struct GitWatchResult {
-    unlisten_event: String,
-}
-
-pub(crate) async fn watch_git_worktree_status<R: Runtime>(
+pub(crate) async fn watch_git_worktree_status<R, F>(
     app_handle: AppHandle<R>,
     dir: &Path,
-    channel: Channel<GitWorktreeStatus>,
-) -> Result<GitWatchResult> {
+    on_status: F,
+) -> Result<GitWatchResult>
+where
+    R: Runtime,
+    F: Fn(GitWorktreeStatus) + Send + Sync + 'static,
+{
     let paths = git_repository_paths(dir)?;
     let repo_dir = dir.to_path_buf();
     let workdir = paths.workdir;
@@ -76,7 +71,7 @@ pub(crate) async fn watch_git_worktree_status<R: Runtime>(
 
     let (cancel_tx, cancel_rx) = watch::channel(());
     let mut cancel_rx = cancel_rx;
-    send_worktree_status(&repo_dir, &channel);
+    send_worktree_status(&repo_dir, &on_status);
 
     tauri::async_runtime::spawn(async move {
         let _watcher = watcher;
@@ -90,7 +85,7 @@ pub(crate) async fn watch_git_worktree_status<R: Runtime>(
                         &workdir,
                         &gitdir,
                         &commondir,
-                        &channel,
+                        &on_status,
                     ).await;
                 }
                 _ = cancel_rx.changed() => {
@@ -119,13 +114,13 @@ async fn handle_git_watch_event(
     workdir: &Path,
     gitdir: &Path,
     commondir: &Path,
-    channel: &Channel<GitWorktreeStatus>,
+    on_status: &impl Fn(GitWorktreeStatus),
 ) {
     if !is_relevant_git_watch_event(event_res, repo_dir, workdir, gitdir, commondir) {
         return;
     }
 
-    send_worktree_status(repo_dir, channel);
+    send_worktree_status(repo_dir, on_status);
 
     let settle_window = sleep(GIT_STATUS_COALESCE_WINDOW);
     tokio::pin!(settle_window);
@@ -140,7 +135,7 @@ async fn handle_git_watch_event(
         }
     }
 
-    send_worktree_status(repo_dir, channel);
+    send_worktree_status(repo_dir, on_status);
 }
 
 fn is_relevant_git_watch_event(
@@ -180,13 +175,9 @@ fn is_relevant_git_watch_event(
     false
 }
 
-fn send_worktree_status(repo_dir: &Path, channel: &Channel<GitWorktreeStatus>) {
+fn send_worktree_status(repo_dir: &Path, on_status: &impl Fn(GitWorktreeStatus)) {
     match git_worktree_status(repo_dir) {
-        Ok(status) => {
-            if let Err(e) = channel.send(status) {
-                warn!("Failed to send git worktree status: {:?}", e);
-            }
-        }
+        Ok(status) => on_status(status),
         Err(e) => {
             warn!("Failed to get git worktree status: {e}");
         }

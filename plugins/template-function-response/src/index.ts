@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type {
   CallTemplateFunctionArgs,
   Context,
@@ -17,6 +16,7 @@ import { filterXPath } from "../../template-function-xml";
 const BEHAVIOR_TTL = "ttl";
 const BEHAVIOR_ALWAYS = "always";
 const BEHAVIOR_SMART = "smart";
+const BEHAVIOR_NEVER = "never";
 
 const RETURN_FIRST = "first";
 const RETURN_ALL = "all";
@@ -34,6 +34,7 @@ const behaviorArgs: DynamicTemplateFunctionArg = {
         { label: "When no responses", value: BEHAVIOR_SMART },
         { label: "Always", value: BEHAVIOR_ALWAYS },
         { label: "When expired", value: BEHAVIOR_TTL },
+        { label: "Never", value: BEHAVIOR_NEVER },
       ],
     },
     {
@@ -112,7 +113,7 @@ export const plugin: PluginDefinition = {
     },
     {
       name: "response.body.path",
-      description: "Access a field of the response body using JsonPath or XPath",
+      description: "Access a field of the response body using JSONPath or XPath",
       aliases: ["response"],
       previewArgs: ["path"],
       args: [
@@ -196,17 +197,8 @@ export const plugin: PluginDefinition = {
         });
         if (response == null) return null;
 
-        if (response.bodyPath == null) {
-          return null;
-        }
-
-        const BOM = "\ufeff";
-        let body: string;
-        try {
-          body = readFileSync(response.bodyPath, "utf-8").replace(BOM, "");
-        } catch {
-          return null;
-        }
+        const body = await readResponseBody(ctx, response);
+        if (body == null) return null;
 
         try {
           const result: JSONPathResult =
@@ -261,22 +253,31 @@ export const plugin: PluginDefinition = {
         });
         if (response == null) return null;
 
-        if (response.bodyPath == null) {
-          return null;
-        }
-
-        let body: string;
-        try {
-          body = readFileSync(response.bodyPath, "utf-8");
-        } catch {
-          return null;
-        }
-
-        return body;
+        return await readResponseBody(ctx, response);
       },
     },
   ],
 };
+
+/**
+ * The response's body as text, or null when there is nothing to read.
+ *
+ * The host is asked for it by response id, so this works wherever the bytes
+ * happen to live — including responses it never recorded, which still get an
+ * id. A body over the runtime's size limit throws rather than coming back
+ * empty, since a template silently rendering to nothing is worse than one that
+ * says why.
+ */
+async function readResponseBody(ctx: Context, response: HttpResponse): Promise<string | null> {
+  // Belt and braces: everything reaching here came from find() or send() and so
+  // has an id. An empty one would just be an unreadable id.
+  if (!response.id) return null;
+
+  const body = await ctx.httpResponse.body({ responseId: response.id });
+  if (body.contentLength === 0) return null;
+
+  return await body.text();
+}
 
 async function getResponse(
   ctx: Context,
@@ -301,7 +302,7 @@ async function getResponse(
 
   const responses = await ctx.httpResponse.find({ requestId: httpRequest.id, limit: 1 });
 
-  if (behavior === "never" && responses.length === 0) {
+  if (behavior === BEHAVIOR_NEVER && responses.length === 0) {
     return null;
   }
 
@@ -309,18 +310,19 @@ async function getResponse(
 
   // Previews happen a ton, and we don't want to send too many times on "always," so treat
   // it as "smart" during preview.
-  const finalBehavior = behavior === "always" && purpose === "preview" ? "smart" : behavior;
+  const finalBehavior =
+    behavior === BEHAVIOR_ALWAYS && purpose === "preview" ? BEHAVIOR_SMART : behavior;
 
   // Send if no responses and "smart," or "always"
   if (
-    (finalBehavior === "smart" && response == null) ||
-    finalBehavior === "always" ||
+    (finalBehavior === BEHAVIOR_SMART && response == null) ||
+    finalBehavior === BEHAVIOR_ALWAYS ||
     (finalBehavior === BEHAVIOR_TTL && shouldSendExpired(response, ttl))
   ) {
     // Explicitly render the request before send (instead of relying on send() to render) so that we can
     // preserve the render purpose.
     const renderedHttpRequest = await ctx.httpRequest.render({ httpRequest, purpose });
-    response = await ctx.httpRequest.send({ httpRequest: renderedHttpRequest });
+    response = (await ctx.httpRequest.send({ httpRequest: renderedHttpRequest })).httpResponse;
   }
 
   return response;

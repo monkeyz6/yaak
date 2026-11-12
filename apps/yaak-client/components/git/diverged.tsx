@@ -1,9 +1,9 @@
 import type { DivergedStrategy } from "@yaakapp-internal/git";
+import { InlineCode } from "@yaakapp-internal/ui";
 import { Trans, i18n, useTranslation } from "@yaakapp-internal/i18n";
-import { HStack, InlineCode } from "@yaakapp-internal/ui";
 import { useState } from "react";
 import { showDialog } from "../../lib/dialog";
-import { Button } from "../core/Button";
+import { DialogFooter } from "../core/Dialog";
 import { RadioCards } from "../core/RadioCards";
 
 type Resolution = "force_reset" | "merge";
@@ -36,7 +36,7 @@ function DivergedDialog({ remote, branch, onResult, onHide }: DivergedDialogProp
   };
 
   return (
-    <div className="flex flex-col gap-4 mb-4">
+    <div className="flex flex-col gap-4">
       <p className="text-text-subtle">
         <Trans
           i18nKey="git.divergedPrompt"
@@ -61,18 +61,18 @@ function DivergedDialog({ remote, branch, onResult, onHide }: DivergedDialogProp
           },
         ]}
       />
-      <HStack space={2} justifyContent="start" className="flex-row-reverse">
-        <Button
-          color={selected === "force_reset" ? "danger" : "primary"}
-          disabled={selected == null}
-          onClick={handleSubmit}
-        >
-          {selected != null ? resolutionLabel[selected] : t("common.selectOption")}
-        </Button>
-        <Button variant="border" onClick={handleCancel}>
-          {t("common.cancel")}
-        </Button>
-      </HStack>
+      <DialogFooter
+        inline
+        actions={[
+          { label: t("common.cancel"), onClick: handleCancel },
+          {
+            label: selected != null ? resolutionLabel[selected] : t("common.selectOption"),
+            color: selected === "force_reset" ? "danger" : "primary",
+            disabled: selected == null,
+            onClick: handleSubmit,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -88,10 +88,8 @@ export async function promptDivergedStrategy({
     showDialog({
       id: "git-diverged",
       title: i18n.t("git.branchesDiverged"),
-      hideX: true,
       size: "sm",
-      disableBackdropClose: true,
-      onClose: () => resolve("cancel"),
+      disableClose: true,
       render: ({ hide }) =>
         DivergedDialog({
           remote,

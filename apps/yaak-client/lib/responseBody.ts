@@ -1,4 +1,3 @@
-import { readFile } from "@tauri-apps/plugin-fs";
 import type { HttpResponse } from "@yaakapp-internal/models";
 import type { FilterResponse } from "@yaakapp-internal/plugins";
 import type { ServerSentEvent, SseSummary, SseTextMode } from "@yaakapp-internal/sse";
@@ -7,7 +6,14 @@ import {
   computeReadableSseText,
   computeSseSummary,
 } from "@yaakapp-internal/sse";
-import { invokeCmd } from "./tauri";
+import { rpc } from "./rpc";
+import { platform } from "@yaakapp-internal/platform";
+
+/**
+ * Reading a response body means naming the response, never the file it lives
+ * in: the backend resolves an id against its own records, so nothing the UI
+ * says can point a read somewhere else.
+ */
 
 export async function getResponseBodyText({
   response,
@@ -16,8 +22,8 @@ export async function getResponseBodyText({
   response: HttpResponse;
   filter: string | null;
 }): Promise<string | null> {
-  const result = await invokeCmd<FilterResponse>("cmd_http_response_body", {
-    response,
+  const result = await rpc<FilterResponse>("cmd_http_response_body", {
+    responseId: response.id,
     filter,
   });
 
@@ -33,19 +39,17 @@ export async function getResponseBodyReadableSseText(
   mode: SseTextMode,
   customJsonPath: string,
 ): Promise<SseSummary> {
-  if (!response.bodyPath) return { fragmentCount: 0, summary: "", detectedMode: null };
-  const bytes = await readFile(response.bodyPath);
-  const text = new TextDecoder("utf-8").decode(bytes);
+  const text = await getResponseBodyDecoded(response);
+  if (text == null) return { fragmentCount: 0, summary: "", detectedMode: null };
   return computeReadableSseText(text, mode, customJsonPath);
 }
 
 export async function getResponseBodyEventSource(
   response: HttpResponse,
 ): Promise<ServerSentEvent[]> {
-  if (!response.bodyPath) return [];
   try {
-    const events = await invokeCmd<ServerSentEvent[]>("cmd_get_sse_events", {
-      filePath: response.bodyPath,
+    const events = await rpc<ServerSentEvent[]>("cmd_get_sse_events", {
+      responseId: response.id,
     });
     if (events.length > 0) {
       return events;
@@ -54,8 +58,9 @@ export async function getResponseBodyEventSource(
     // Fall back to raw JSON frame parsing for non-standard SSE-like responses.
   }
 
-  const bytes = await readFile(response.bodyPath);
-  const text = new TextDecoder("utf-8").decode(bytes);
+  const text = await getResponseBodyDecoded(response);
+  if (text == null) return [];
+
   return candidateJsonPayloadsFromSseText(text).map((data, index) => ({
     data,
     eventType: "",
@@ -68,16 +73,20 @@ export async function getResponseBodySseSummary(
   response: HttpResponse,
   resultKeyPath: string,
 ): Promise<SseSummary> {
-  if (!response.bodyPath) return { fragmentCount: 0, summary: "" };
+  const text = await getResponseBodyDecoded(response);
+  if (text == null) return { fragmentCount: 0, summary: "" };
 
-  const bytes = await readFile(response.bodyPath);
-  const text = new TextDecoder("utf-8").decode(bytes);
   return computeSseSummary(text, resultKeyPath);
 }
 
 export async function getResponseBodyBytes(
   response: HttpResponse,
 ): Promise<Uint8Array<ArrayBuffer> | null> {
-  if (!response.bodyPath) return null;
-  return readFile(response.bodyPath);
+  // A response body is stored under the response's own id
+  return platform.blobs.read(response.id);
+}
+
+async function getResponseBodyDecoded(response: HttpResponse): Promise<string | null> {
+  const bytes = await getResponseBodyBytes(response);
+  return bytes == null ? null : new TextDecoder("utf-8").decode(bytes);
 }

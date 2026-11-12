@@ -1,6 +1,5 @@
 import type { Extension } from "@codemirror/state";
 import { Compartment } from "@codemirror/state";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { debounce } from "@yaakapp-internal/lib";
 import { gitMutations } from "@yaakapp-internal/git";
 import { i18n, Trans, useTranslation } from "@yaakapp-internal/i18n";
@@ -46,7 +45,8 @@ import { getFolderActions } from "../hooks/useFolderActions";
 import { getGrpcRequestActions } from "../hooks/useGrpcRequestActions";
 import { useHotKey } from "../hooks/useHotKey";
 import { getHttpRequestActions } from "../hooks/useHttpRequestActions";
-import { useListenToTauriEvent } from "../hooks/useListenToTauriEvent";
+import { platform } from "@yaakapp-internal/platform";
+import { usePlatformEvent } from "../hooks/usePlatformEvent";
 import { getModelAncestors } from "../hooks/useModelAncestors";
 import { sendAnyHttpRequest } from "../hooks/useSendAnyHttpRequest";
 import { useSidebarHidden } from "../hooks/useSidebarHidden";
@@ -136,10 +136,10 @@ function Sidebar({ className }: { className?: string }) {
   // Focus new sidebar models created by the user in this window. Writes from other
   // sources (import, sync, CLI) can carry thousands of models and shouldn't move
   // the selection.
-  useListenToTauriEvent<ModelPayload[]>("model_writes", ({ payload: payloads }) => {
+  usePlatformEvent<ModelPayload[]>("model_writes", (payloads) => {
     for (const payload of payloads) {
       if (payload.updateSource.type !== "window") continue;
-      if (payload.updateSource.label !== getCurrentWebviewWindow().label) continue;
+      if (payload.updateSource.label !== platform.window.label) continue;
       if (!isSidebarLeafModel(payload.model)) continue;
       if (!(payload.change.type === "upsert" && payload.change.created)) continue;
       treeRef.current?.selectItem(payload.model.id, true);
@@ -958,10 +958,14 @@ const sidebarTreeAtom = atom<
 
     if (node.children != null) {
       childItems.sort((a, b) => {
-        if (a.sortPriority === b.sortPriority) {
-          return a.updatedAt > b.updatedAt ? 1 : -1;
+        if (a.sortPriority !== b.sortPriority) {
+          return a.sortPriority - b.sortPriority;
         }
-        return a.sortPriority - b.sortPriority;
+        // Keep equal-priority items in a stable order when they are edited.
+        if (a.createdAt !== b.createdAt) {
+          return a.createdAt > b.createdAt ? 1 : -1;
+        }
+        return a.id === b.id ? 0 : a.id > b.id ? 1 : -1;
       });
 
       for (const item of childItems) {

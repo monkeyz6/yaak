@@ -187,24 +187,23 @@ impl PluginManager {
         }
 
         let bundled_dirs = plugin_manager.list_bundled_plugin_dirs().await?;
-        let db = query_manager.connect();
-        for dir in &bundled_dirs {
-            if db.get_plugin_by_directory(dir).is_none() {
-                db.upsert_plugin(
-                    &Plugin {
-                        directory: dir.clone(),
-                        enabled: true,
-                        url: None,
-                        source: PluginSource::Bundled,
-                        ..Default::default()
-                    },
-                    &UpdateSource::Background,
-                )?;
+        let plugins = query_manager.with_tx(|db| {
+            for dir in &bundled_dirs {
+                if db.get_plugin_by_directory(dir).is_none() {
+                    db.upsert_plugin(
+                        &Plugin {
+                            directory: dir.clone(),
+                            enabled: true,
+                            url: None,
+                            source: PluginSource::Bundled,
+                            ..Default::default()
+                        },
+                        &UpdateSource::Background,
+                    )?;
+                }
             }
-        }
-
-        let plugins = db.list_plugins()?;
-        drop(db);
+            db.list_plugins()
+        })?;
 
         let init_errors = plugin_manager.initialize_all_plugins(plugins, plugin_context).await;
         if !init_errors.is_empty() {
@@ -1093,24 +1092,50 @@ impl PluginManager {
         plugin_context: &PluginContext,
         content: &str,
     ) -> Result<ImportResponse> {
+        self.import_input(plugin_context, &ImportRequest::from_text(content)).await
+    }
+
+    pub async fn import_input(
+        &self,
+        plugin_context: &PluginContext,
+        input: &ImportRequest,
+    ) -> Result<ImportResponse> {
         let reply_events = self
             .send_and_wait(
                 plugin_context,
-                &InternalEventPayload::ImportRequest(ImportRequest {
-                    content: content.to_string(),
-                }),
+                &InternalEventPayload::ImportRequest(input.clone()),
                 Duration::from_secs(60),
             )
             .await?;
 
         // TODO: Don't just return the first valid response
-        let result = reply_events.into_iter().find_map(|e| match e.payload {
-            InternalEventPayload::ImportResponse(resp) => Some(resp),
+        let errors = reply_events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                InternalEventPayload::ErrorResponse(error) => Some(error.error.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let result = reply_events.into_iter().find_map(|e| match e {
+            InternalEvent {
+                plugin_name,
+                payload: InternalEventPayload::ImportResponse(mut resp),
+                ..
+            } => {
+                // Older plugin runtimes do not include the importer's display name. The plugin
+                // package name is still enough to identify the detected format in that case.
+                if resp.importer.is_empty() {
+                    resp.importer = plugin_name;
+                }
+                Some(resp)
+            }
             _ => None,
         });
 
         match result {
-            None => Err(PluginErr("No importers found for file contents".to_string())),
+            None if !errors.is_empty() => Err(PluginErr(errors)),
+            None => Err(PluginErr("No importers found for this input".to_string())),
             Some(resp) => Ok(resp),
         }
     }

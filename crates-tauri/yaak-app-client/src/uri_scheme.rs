@@ -1,18 +1,27 @@
 use crate::PluginContextExt;
 use crate::error::Result;
-use crate::import::import_data;
+use crate::import::{file_origin, import_data, url_origin};
 use crate::models_ext::QueryManagerExt;
 use log::{info, warn};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime, Url};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use ts_rs::TS;
 use yaak_api::{ApiClientKind, yaak_api_client};
 use yaak_models::util::generate_id;
 use yaak_plugins::events::{Color, ShowToastRequest};
 use yaak_plugins::install::download_and_install;
-use yaak_plugins::manager::PluginManager;
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "index.ts")]
+pub struct NavigateWorkspace {
+    workspace_id: String,
+    environment_id: Option<String>,
+}
 
 pub(crate) async fn handle_deep_link<R: Runtime>(
     app_handle: &AppHandle<R>,
@@ -44,7 +53,7 @@ pub(crate) async fn handle_deep_link<R: Runtime>(
                 return Ok(());
             }
 
-            let plugin_manager = Arc::new((*window.state::<PluginManager>()).clone());
+            let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(window).await?);
             let query_manager = app_handle.db_manager();
             let app_version = app_handle.package_info().version.to_string();
             let http_client = yaak_api_client(ApiClientKind::App, &app_version)?;
@@ -70,6 +79,7 @@ pub(crate) async fn handle_deep_link<R: Runtime>(
         }
         "import-data" => {
             let mut file_path = query_map.get("path").map(|s| s.to_owned());
+            let mut origin = None;
             let name = query_map.get("name").map(|s| s.to_owned()).unwrap_or("data".to_string());
             _ = window.set_focus();
 
@@ -99,6 +109,7 @@ pub(crate) async fn handle_deep_link<R: Runtime>(
                     .to_string();
                 fs::write(&p, json)?;
                 file_path = Some(p);
+                origin = Some(url_origin(file_url));
             }
 
             let file_path = match file_path {
@@ -117,7 +128,8 @@ pub(crate) async fn handle_deep_link<R: Runtime>(
                 }
             };
 
-            let results = import_data(window, &file_path).await?;
+            let origin = origin.unwrap_or_else(|| file_origin(&file_path));
+            let results = import_data(window, &file_path, Some(origin)).await?;
             window.emit(
                 "show_toast",
                 ShowToastRequest {
@@ -127,6 +139,15 @@ pub(crate) async fn handle_deep_link<R: Runtime>(
                     timeout: Some(5000),
                 },
             )?;
+            if let Some(workspace) = results.workspaces.first() {
+                window.emit(
+                    "navigate_workspace",
+                    NavigateWorkspace {
+                        workspace_id: workspace.id.clone(),
+                        environment_id: results.environments.first().map(|e| e.id.clone()),
+                    },
+                )?;
+            }
         }
         _ => {
             warn!("Unknown deep link command: {command}");

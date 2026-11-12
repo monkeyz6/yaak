@@ -1,18 +1,18 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import type { Workspace } from "@yaakapp-internal/models";
 import { workspacesAtom } from "@yaakapp-internal/models";
-import { HStack, VStack } from "@yaakapp-internal/ui";
+import { VStack } from "@yaakapp-internal/ui";
 import { useAtomValue } from "jotai";
 import { useCallback, useMemo, useState } from "react";
 import slugify from "slugify";
 import { activeWorkspaceAtom } from "../hooks/useActiveWorkspace";
-import { invokeCmd } from "../lib/tauri";
+import { rpc } from "../lib/rpc";
 import { CommercialUseBanner } from "./CommercialUseBanner";
-import { Button } from "./core/Button";
 import { Checkbox } from "./core/Checkbox";
 import { DetailsBanner } from "./core/DetailsBanner";
+import { DialogFooter } from "./core/Dialog";
 import { Link } from "./core/Link";
+import { platform } from "@yaakapp-internal/platform";
 
 interface Props {
   onHide: () => void;
@@ -66,29 +66,30 @@ function ExportDataDialogContent({
     const ids = Object.keys(selectedWorkspaces).filter((k) => selectedWorkspaces[k]);
     const workspace = ids.length === 1 ? workspaces.find((w) => w.id === ids[0]) : undefined;
     const slug = workspace ? slugify(workspace.name, { lower: true }) : "workspaces";
-    const exportPath = await save({
-      title: t("mainMenu.exportData"),
-      defaultPath: `yaak.${slug}.json`,
-    });
-    if (exportPath == null) {
-      return;
-    }
-
-    await invokeCmd("cmd_export_data", {
+    const document = await rpc<string>("cmd_export_data", {
       workspaceIds: ids,
-      exportPath,
       includePrivateEnvironments: includePrivateEnvironments,
     });
+
+    const savedTo = await platform.files.save(
+      `yaak.${slug}.json`,
+      new TextEncoder().encode(document),
+      [{ name: "JSON", extensions: ["json"] }],
+    );
+    if (savedTo == null) {
+      return; // Cancelled
+    }
+
     onHide();
-    onSuccess(exportPath);
-  }, [includePrivateEnvironments, onHide, onSuccess, selectedWorkspaces, t, workspaces]);
+    onSuccess(savedTo);
+  }, [includePrivateEnvironments, onHide, onSuccess, selectedWorkspaces, workspaces]);
 
   const allSelected = workspaces.every((w) => selectedWorkspaces[w.id]);
   const numSelected = Object.values(selectedWorkspaces).filter(Boolean).length;
   const noneSelected = numSelected === 0;
   return (
-    <div className="h-full w-full grid grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-b-lg">
-      <VStack space={3} className="overflow-auto px-5 pb-6">
+    <>
+      <VStack space={3} className="pb-4">
         <CommercialUseBanner source="data-export" title={t("importExport.exportingWorkData")} />
 
         <table className="w-full mb-auto min-w-full max-w-full divide-y divide-surface-highlight">
@@ -142,32 +143,27 @@ function ExportDataDialogContent({
           />
         </DetailsBanner>
       </VStack>
-      <footer className="px-5 grid grid-cols-[1fr_auto] items-center bg-surface py-3 border-t border-border-subtle">
-        <div>
+      <DialogFooter
+        leftSlot={
           <Link href="https://yaak.app/button/new" noUnderline className="text-text-subtlest">
             {t("mainMenu.createRunButton")}
           </Link>
-        </div>
-        <HStack space={2} justifyContent="end">
-          <Button size="sm" className="focus" variant="border" onClick={onHide}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            size="sm"
-            type="submit"
-            className="focus"
-            color="primary"
-            disabled={noneSelected}
-            onClick={() => handleExport()}
-          >
-            {numSelected === 0
-              ? t("importExport.exportNothing")
-              : numSelected === 1
-                ? t("importExport.exportWorkspace")
-                : t("importExport.exportWorkspaces", { count: numSelected })}
-          </Button>
-        </HStack>
-      </footer>
-    </div>
+        }
+        actions={[
+          { label: t("common.cancel"), onClick: onHide },
+          {
+            label:
+              numSelected === 0
+                ? t("importExport.exportNothing")
+                : numSelected === 1
+                  ? t("importExport.exportWorkspace")
+                  : t("importExport.exportWorkspaces", { count: numSelected }),
+            color: "primary",
+            disabled: noneSelected,
+            onClick: () => handleExport(),
+          },
+        ]}
+      />
+    </>
   );
 }

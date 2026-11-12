@@ -1,4 +1,4 @@
-import { type } from "@tauri-apps/plugin-os";
+import { platform } from "@yaakapp-internal/platform";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import { settingsAtom, workspacesAtom } from "@yaakapp-internal/models";
 import { Banner, HeaderSize, HStack, SidebarLayout } from "@yaakapp-internal/ui";
@@ -41,6 +41,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { FolderLayout } from "./FolderLayout";
 import { GrpcConnectionLayout } from "./GrpcConnectionLayout";
 import { HttpRequestLayout } from "./HttpRequestLayout";
+import { RedirectToLatestWorkspace } from "./RedirectToLatestWorkspace";
 import { PinnedVarsBar } from "./PinnedVarsBar";
 import Sidebar from "./Sidebar";
 import { SidebarActions } from "./SidebarActions";
@@ -56,7 +57,7 @@ export function Workspace() {
   const workspaces = useAtomValue(workspacesAtom);
   const { t } = useTranslation();
   const settings = useAtomValue(settingsAtom);
-  const osType = type();
+  const osType = platform.osType();
   const [width, setWidth] = useSidebarWidth();
   const [sidebarHidden, setSidebarHidden] = useSidebarHidden();
   const [floatingSidebarHidden, setFloatingSidebarHidden] = useFloatingSidebarHidden();
@@ -69,9 +70,8 @@ export function Workspace() {
     return { background };
   }, [activeEnvironment?.color]);
 
-  // We're loading still
   if (workspaces.length === 0) {
-    return null;
+    return <RedirectToLatestWorkspace />;
   }
 
   const header = (

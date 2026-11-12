@@ -1,3 +1,7 @@
+use crate::response_body::ResponseBodyStore;
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
+use log::warn;
 use yaak_models::models::AnyModel;
 use yaak_models::query_manager::QueryManager;
 use yaak_models::util::UpdateSource;
@@ -5,12 +9,14 @@ use yaak_plugins::events::{
     CloseWindowRequest, CopyTextRequest, DeleteKeyValueRequest, DeleteKeyValueResponse,
     DeleteModelRequest, DeleteModelResponse, ErrorResponse, FindHttpResponsesRequest,
     FindHttpResponsesResponse, GetCookieValueRequest, GetHttpRequestByIdRequest,
-    GetHttpRequestByIdResponse, GetKeyValueRequest, GetKeyValueResponse, InternalEventPayload,
-    ListCookieNamesRequest, ListFoldersRequest, ListFoldersResponse, ListHttpRequestsRequest,
-    ListHttpRequestsResponse, ListOpenWorkspacesRequest, OpenExternalUrlRequest, OpenWindowRequest,
-    PromptFormRequest, PromptTextRequest, ReloadResponse, RenderGrpcRequestRequest,
-    RenderHttpRequestRequest, SendHttpRequestRequest, SetKeyValueRequest, ShowToastRequest,
-    TemplateRenderRequest, UpsertModelRequest, UpsertModelResponse, WindowInfoRequest,
+    GetHttpRequestByIdResponse, GetHttpResponseBodyInfoRequest, GetHttpResponseBodyInfoResponse,
+    GetKeyValueRequest, GetKeyValueResponse, InternalEventPayload, ListCookieNamesRequest,
+    ListFoldersRequest, ListFoldersResponse, ListHttpRequestsRequest, ListHttpRequestsResponse,
+    ListOpenWorkspacesRequest, OpenExternalUrlRequest, OpenWindowRequest, PromptFormRequest,
+    PromptTextRequest, ReadHttpResponseBodyChunkRequest, ReadHttpResponseBodyChunkResponse,
+    ReloadResponse, RenderGrpcRequestRequest, RenderHttpRequestRequest, SendHttpRequestRequest,
+    SetKeyValueRequest, ShowToastRequest, TemplateRenderRequest, UpsertModelRequest,
+    UpsertModelResponse, WindowInfoRequest,
 };
 
 pub struct SharedPluginEventContext<'a> {
@@ -40,6 +46,8 @@ pub enum SharedRequest<'a> {
     ListFolders(&'a ListFoldersRequest),
     ListHttpRequests(&'a ListHttpRequestsRequest),
     FindHttpResponses(&'a FindHttpResponsesRequest),
+    GetHttpResponseBodyInfo(&'a GetHttpResponseBodyInfoRequest),
+    ReadHttpResponseBodyChunk(&'a ReadHttpResponseBodyChunkRequest),
     UpsertModel(&'a UpsertModelRequest),
     DeleteModel(&'a DeleteModelRequest),
 }
@@ -136,6 +144,12 @@ impl<'a> From<&'a InternalEventPayload> for GroupedPluginRequest<'a> {
             InternalEventPayload::FindHttpResponsesRequest(req) => {
                 GroupedPluginRequest::Shared(SharedRequest::FindHttpResponses(req))
             }
+            InternalEventPayload::GetHttpResponseBodyInfoRequest(req) => {
+                GroupedPluginRequest::Shared(SharedRequest::GetHttpResponseBodyInfo(req))
+            }
+            InternalEventPayload::ReadHttpResponseBodyChunkRequest(req) => {
+                GroupedPluginRequest::Shared(SharedRequest::ReadHttpResponseBodyChunk(req))
+            }
             InternalEventPayload::UpsertModelRequest(req) => {
                 GroupedPluginRequest::Shared(SharedRequest::UpsertModel(req))
             }
@@ -182,13 +196,17 @@ impl<'a> From<&'a InternalEventPayload> for GroupedPluginRequest<'a> {
 
 pub fn handle_shared_plugin_event<'a>(
     query_manager: &QueryManager,
+    body_store: &dyn ResponseBodyStore,
     payload: &'a InternalEventPayload,
     context: SharedPluginEventContext<'_>,
 ) -> GroupedPluginEvent<'a> {
     match GroupedPluginRequest::from(payload) {
-        GroupedPluginRequest::Shared(req) => {
-            GroupedPluginEvent::Handled(Some(build_shared_reply(query_manager, req, context)))
-        }
+        GroupedPluginRequest::Shared(req) => GroupedPluginEvent::Handled(Some(build_shared_reply(
+            query_manager,
+            body_store,
+            req,
+            context,
+        ))),
         GroupedPluginRequest::Host(req) => GroupedPluginEvent::ToHandle(req),
         GroupedPluginRequest::Ignore => GroupedPluginEvent::Handled(None),
     }
@@ -196,6 +214,7 @@ pub fn handle_shared_plugin_event<'a>(
 
 fn build_shared_reply(
     query_manager: &QueryManager,
+    body_store: &dyn ResponseBodyStore,
     request: SharedRequest<'_>,
     context: SharedPluginEventContext<'_>,
 ) -> InternalEventPayload {
@@ -208,11 +227,18 @@ fn build_shared_reply(
             InternalEventPayload::GetKeyValueResponse(GetKeyValueResponse { value })
         }
         SharedRequest::SetKeyValue(req) => {
-            query_manager.connect().set_plugin_key_value(context.plugin_name, &req.key, &req.value);
+            if let Err(e) = query_manager.with_tx(|tx| {
+                tx.set_plugin_key_value(context.plugin_name, &req.key, &req.value);
+                Ok::<(), yaak_models::error::Error>(())
+            }) {
+                warn!("Failed to set plugin key value: {e}");
+            }
             InternalEventPayload::SetKeyValueResponse(yaak_plugins::events::SetKeyValueResponse {})
         }
         SharedRequest::DeleteKeyValue(req) => {
-            match query_manager.connect().delete_plugin_key_value(context.plugin_name, &req.key) {
+            match query_manager
+                .with_tx(|tx| tx.delete_plugin_key_value(context.plugin_name, &req.key))
+            {
                 Ok(deleted) => {
                     InternalEventPayload::DeleteKeyValueResponse(DeleteKeyValueResponse { deleted })
                 }
@@ -283,12 +309,39 @@ fn build_shared_reply(
                 http_responses,
             })
         }
+        SharedRequest::GetHttpResponseBodyInfo(req) => match body_store.info(&req.response_id) {
+            Ok(info) => InternalEventPayload::GetHttpResponseBodyInfoResponse(
+                GetHttpResponseBodyInfoResponse {
+                    content_length: info.content_length,
+                    content_type: info.content_type,
+                    complete: info.complete,
+                },
+            ),
+            Err(err) => InternalEventPayload::ErrorResponse(ErrorResponse {
+                error: format!("Failed to read body of response {}: {err}", req.response_id),
+            }),
+        },
+        SharedRequest::ReadHttpResponseBodyChunk(req) => {
+            match body_store.read_chunk(&req.response_id, req.offset, req.length) {
+                Ok(bytes) => InternalEventPayload::ReadHttpResponseBodyChunkResponse(
+                    ReadHttpResponseBodyChunkResponse {
+                        length: bytes.len() as u64,
+                        data: BASE64_STANDARD.encode(bytes),
+                    },
+                ),
+                Err(err) => InternalEventPayload::ErrorResponse(ErrorResponse {
+                    error: format!("Failed to read body of response {}: {err}", req.response_id),
+                }),
+            }
+        }
         SharedRequest::UpsertModel(req) => {
             use AnyModel::*;
 
             let model = match &req.model {
                 HttpRequest(m) => {
-                    match query_manager.connect().upsert_http_request(m, &UpdateSource::Plugin) {
+                    match query_manager
+                        .with_tx(|tx| tx.upsert_http_request(m, &UpdateSource::Plugin))
+                    {
                         Ok(model) => HttpRequest(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -298,7 +351,9 @@ fn build_shared_reply(
                     }
                 }
                 GrpcRequest(m) => {
-                    match query_manager.connect().upsert_grpc_request(m, &UpdateSource::Plugin) {
+                    match query_manager
+                        .with_tx(|tx| tx.upsert_grpc_request(m, &UpdateSource::Plugin))
+                    {
                         Ok(model) => GrpcRequest(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -308,7 +363,8 @@ fn build_shared_reply(
                     }
                 }
                 WebsocketRequest(m) => {
-                    match query_manager.connect().upsert_websocket_request(m, &UpdateSource::Plugin)
+                    match query_manager
+                        .with_tx(|tx| tx.upsert_websocket_request(m, &UpdateSource::Plugin))
                     {
                         Ok(model) => WebsocketRequest(model),
                         Err(err) => {
@@ -319,7 +375,7 @@ fn build_shared_reply(
                     }
                 }
                 Folder(m) => {
-                    match query_manager.connect().upsert_folder(m, &UpdateSource::Plugin) {
+                    match query_manager.with_tx(|tx| tx.upsert_folder(m, &UpdateSource::Plugin)) {
                         Ok(model) => Folder(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -329,7 +385,9 @@ fn build_shared_reply(
                     }
                 }
                 Environment(m) => {
-                    match query_manager.connect().upsert_environment(m, &UpdateSource::Plugin) {
+                    match query_manager
+                        .with_tx(|tx| tx.upsert_environment(m, &UpdateSource::Plugin))
+                    {
                         Ok(model) => Environment(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -339,7 +397,8 @@ fn build_shared_reply(
                     }
                 }
                 Workspace(m) => {
-                    match query_manager.connect().upsert_workspace(m, &UpdateSource::Plugin) {
+                    match query_manager.with_tx(|tx| tx.upsert_workspace(m, &UpdateSource::Plugin))
+                    {
                         Ok(model) => Workspace(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -361,8 +420,7 @@ fn build_shared_reply(
             let model = match req.model.as_str() {
                 "http_request" => {
                     match query_manager
-                        .connect()
-                        .delete_http_request_by_id(&req.id, &UpdateSource::Plugin)
+                        .with_tx(|tx| tx.delete_http_request_by_id(&req.id, &UpdateSource::Plugin))
                     {
                         Ok(model) => AnyModel::HttpRequest(model),
                         Err(err) => {
@@ -374,8 +432,7 @@ fn build_shared_reply(
                 }
                 "grpc_request" => {
                     match query_manager
-                        .connect()
-                        .delete_grpc_request_by_id(&req.id, &UpdateSource::Plugin)
+                        .with_tx(|tx| tx.delete_grpc_request_by_id(&req.id, &UpdateSource::Plugin))
                     {
                         Ok(model) => AnyModel::GrpcRequest(model),
                         Err(err) => {
@@ -386,10 +443,9 @@ fn build_shared_reply(
                     }
                 }
                 "websocket_request" => {
-                    match query_manager
-                        .connect()
-                        .delete_websocket_request_by_id(&req.id, &UpdateSource::Plugin)
-                    {
+                    match query_manager.with_tx(|tx| {
+                        tx.delete_websocket_request_by_id(&req.id, &UpdateSource::Plugin)
+                    }) {
                         Ok(model) => AnyModel::WebsocketRequest(model),
                         Err(err) => {
                             return InternalEventPayload::ErrorResponse(ErrorResponse {
@@ -399,8 +455,7 @@ fn build_shared_reply(
                     }
                 }
                 "folder" => match query_manager
-                    .connect()
-                    .delete_folder_by_id(&req.id, &UpdateSource::Plugin)
+                    .with_tx(|tx| tx.delete_folder_by_id(&req.id, &UpdateSource::Plugin))
                 {
                     Ok(model) => AnyModel::Folder(model),
                     Err(err) => {
@@ -411,8 +466,7 @@ fn build_shared_reply(
                 },
                 "environment" => {
                     match query_manager
-                        .connect()
-                        .delete_environment_by_id(&req.id, &UpdateSource::Plugin)
+                        .with_tx(|tx| tx.delete_environment_by_id(&req.id, &UpdateSource::Plugin))
                     {
                         Ok(model) => AnyModel::Environment(model),
                         Err(err) => {
@@ -437,9 +491,25 @@ fn build_shared_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::response_body::{FileResponseBodyStore, ResponseBodyInfo};
+    use std::cell::RefCell;
     use tempfile::TempDir;
     use yaak_models::models::{AnyModel, Folder, HttpRequest, Workspace};
     use yaak_models::util::UpdateSource;
+
+    /// The real dispatch, with the store the desktop and CLI hand it.
+    fn dispatch<'a>(
+        query_manager: &QueryManager,
+        payload: &'a InternalEventPayload,
+        context: SharedPluginEventContext<'_>,
+    ) -> GroupedPluginEvent<'a> {
+        handle_shared_plugin_event(
+            query_manager,
+            &FileResponseBodyStore::new(query_manager),
+            payload,
+            context,
+        )
+    }
 
     fn seed_query_manager() -> (QueryManager, TempDir) {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -449,45 +519,38 @@ mod tests {
             yaak_models::init_standalone(&db_path, &blob_path).expect("Failed to initialize DB");
 
         query_manager
-            .connect()
-            .upsert_workspace(
-                &Workspace {
-                    id: "wk_test".to_string(),
-                    name: "Workspace".to_string(),
-                    ..Default::default()
-                },
-                &UpdateSource::Sync,
-            )
-            .expect("Failed to seed workspace");
-
-        query_manager
-            .connect()
-            .upsert_folder(
-                &Folder {
-                    id: "fl_test".to_string(),
-                    workspace_id: "wk_test".to_string(),
-                    name: "Folder".to_string(),
-                    ..Default::default()
-                },
-                &UpdateSource::Sync,
-            )
-            .expect("Failed to seed folder");
-
-        query_manager
-            .connect()
-            .upsert_http_request(
-                &HttpRequest {
-                    id: "rq_test".to_string(),
-                    workspace_id: "wk_test".to_string(),
-                    folder_id: Some("fl_test".to_string()),
-                    name: "Request".to_string(),
-                    method: "GET".to_string(),
-                    url: "https://example.com".to_string(),
-                    ..Default::default()
-                },
-                &UpdateSource::Sync,
-            )
-            .expect("Failed to seed request");
+            .with_tx(|tx| {
+                tx.upsert_workspace(
+                    &Workspace {
+                        id: "wk_test".to_string(),
+                        name: "Workspace".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Sync,
+                )?;
+                tx.upsert_folder(
+                    &Folder {
+                        id: "fl_test".to_string(),
+                        workspace_id: "wk_test".to_string(),
+                        name: "Folder".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Sync,
+                )?;
+                tx.upsert_http_request(
+                    &HttpRequest {
+                        id: "rq_test".to_string(),
+                        workspace_id: "wk_test".to_string(),
+                        folder_id: Some("fl_test".to_string()),
+                        name: "Request".to_string(),
+                        method: "GET".to_string(),
+                        url: "https://example.com".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Sync,
+                )
+            })
+            .expect("Failed to seed");
 
         (query_manager, temp_dir)
     }
@@ -498,7 +561,7 @@ mod tests {
         let payload = InternalEventPayload::ListHttpRequestsRequest(
             yaak_plugins::events::ListHttpRequestsRequest { folder_id: None },
         );
-        let result = handle_shared_plugin_event(
+        let result = dispatch(
             &query_manager,
             &payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },
@@ -517,7 +580,7 @@ mod tests {
         let by_workspace_payload = InternalEventPayload::ListHttpRequestsRequest(
             yaak_plugins::events::ListHttpRequestsRequest { folder_id: None },
         );
-        let by_workspace = handle_shared_plugin_event(
+        let by_workspace = dispatch(
             &query_manager,
             &by_workspace_payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: Some("wk_test") },
@@ -536,7 +599,7 @@ mod tests {
                 folder_id: Some("fl_test".to_string()),
             },
         );
-        let by_folder = handle_shared_plugin_event(
+        let by_folder = dispatch(
             &query_manager,
             &by_folder_payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },
@@ -559,7 +622,7 @@ mod tests {
             limit: Some(1),
         });
 
-        let result = handle_shared_plugin_event(
+        let result = dispatch(
             &query_manager,
             &payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: Some("wk_test") },
@@ -572,6 +635,111 @@ mod tests {
                 assert!(resp.http_responses.is_empty());
             }
             other => panic!("unexpected find responses result: {other:?}"),
+        }
+    }
+
+    /// A store that answers from memory, standing in for whatever holds the
+    /// bytes — the point being that the dispatch below never learns which.
+    struct FakeBodyStore {
+        body: Vec<u8>,
+        reads: RefCell<Vec<(u64, u64)>>,
+    }
+
+    impl ResponseBodyStore for FakeBodyStore {
+        fn info(&self, _response_id: &str) -> crate::error::Result<ResponseBodyInfo> {
+            Ok(ResponseBodyInfo {
+                content_length: self.body.len() as u64,
+                content_type: Some("text/plain; charset=utf-8".to_string()),
+                complete: true,
+            })
+        }
+
+        fn read_chunk(
+            &self,
+            _response_id: &str,
+            offset: u64,
+            length: u64,
+        ) -> crate::error::Result<Vec<u8>> {
+            self.reads.borrow_mut().push((offset, length));
+            let start = (offset as usize).min(self.body.len());
+            let end = (start + length as usize).min(self.body.len());
+            Ok(self.body[start..end].to_vec())
+        }
+    }
+
+    #[test]
+    fn response_body_is_read_by_id_through_the_store() {
+        let (query_manager, _temp_dir) = seed_query_manager();
+        let store = FakeBodyStore { body: b"hello".to_vec(), reads: RefCell::new(Vec::new()) };
+
+        let info_payload =
+            InternalEventPayload::GetHttpResponseBodyInfoRequest(GetHttpResponseBodyInfoRequest {
+                response_id: "rs_test".to_string(),
+            });
+        let info = handle_shared_plugin_event(
+            &query_manager,
+            &store,
+            &info_payload,
+            SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },
+        );
+        match info {
+            GroupedPluginEvent::Handled(Some(
+                InternalEventPayload::GetHttpResponseBodyInfoResponse(resp),
+            )) => {
+                assert_eq!(resp.content_length, 5);
+                assert_eq!(resp.content_type.as_deref(), Some("text/plain; charset=utf-8"));
+            }
+            other => panic!("unexpected body info result: {other:?}"),
+        }
+
+        let chunk_payload = InternalEventPayload::ReadHttpResponseBodyChunkRequest(
+            ReadHttpResponseBodyChunkRequest {
+                response_id: "rs_test".to_string(),
+                offset: 1,
+                length: 3,
+            },
+        );
+        let chunk = handle_shared_plugin_event(
+            &query_manager,
+            &store,
+            &chunk_payload,
+            SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },
+        );
+        match chunk {
+            GroupedPluginEvent::Handled(Some(
+                InternalEventPayload::ReadHttpResponseBodyChunkResponse(resp),
+            )) => {
+                assert_eq!(resp.length, 3);
+                assert_eq!(BASE64_STANDARD.decode(resp.data).unwrap(), b"ell");
+            }
+            other => panic!("unexpected body chunk result: {other:?}"),
+        }
+
+        assert_eq!(*store.reads.borrow(), vec![(1, 3)]);
+    }
+
+    #[test]
+    fn an_unreadable_response_body_becomes_an_error_reply() {
+        let (query_manager, _temp_dir) = seed_query_manager();
+        let payload =
+            InternalEventPayload::GetHttpResponseBodyInfoRequest(GetHttpResponseBodyInfoRequest {
+                response_id: "rs_never_persisted".to_string(),
+            });
+        let result = dispatch(
+            &query_manager,
+            &payload,
+            SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },
+        );
+
+        match result {
+            GroupedPluginEvent::Handled(Some(InternalEventPayload::ErrorResponse(resp))) => {
+                assert!(
+                    resp.error.contains("rs_never_persisted"),
+                    "unhelpful error: {}",
+                    resp.error
+                )
+            }
+            other => panic!("unexpected missing-response result: {other:?}"),
         }
     }
 
@@ -590,7 +758,7 @@ mod tests {
             }),
         });
 
-        let upsert_result = handle_shared_plugin_event(
+        let upsert_result = dispatch(
             &query_manager,
             &upsert_payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: Some("wk_test") },
@@ -609,7 +777,7 @@ mod tests {
             model: "http_request".to_string(),
             id: "rq_test".to_string(),
         });
-        let delete_result = handle_shared_plugin_event(
+        let delete_result = dispatch(
             &query_manager,
             &delete_payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: Some("wk_test") },
@@ -631,7 +799,7 @@ mod tests {
         let payload = InternalEventPayload::WindowInfoRequest(WindowInfoRequest {
             label: "main".to_string(),
         });
-        let result = handle_shared_plugin_event(
+        let result = dispatch(
             &query_manager,
             &payload,
             SharedPluginEventContext { plugin_name: "@yaak/test", workspace_id: None },

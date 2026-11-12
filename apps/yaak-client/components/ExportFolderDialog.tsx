@@ -1,11 +1,11 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "@yaakapp-internal/i18n";
+import { platform } from "@yaakapp-internal/platform";
 import type { Folder } from "@yaakapp-internal/models";
 import { HStack, VStack } from "@yaakapp-internal/ui";
 import { useCallback, useState } from "react";
 import slugify from "slugify";
 import { showAlert } from "../lib/alert";
-import { invokeCmd } from "../lib/tauri";
+import { rpc } from "../lib/rpc";
 import { Button } from "./core/Button";
 import { RadioCards } from "./core/RadioCards";
 
@@ -37,22 +37,20 @@ export function ExportFolderDialog({ folder, onHide, onSuccess }: Props) {
 
   const handleExport = useCallback(async () => {
     const slug = slugify(folder.name || "folder", { lower: true }) || "folder";
-    const defaultPath =
+    const suggestedName =
       format === "postman" ? `${slug}.postman_collection.json` : `${slug}.openapi.json`;
-    const exportPath = await save({
-      title: t("contextMenu.exportFolder"),
-      defaultPath,
-    });
-    if (exportPath == null) {
-      return;
-    }
 
     try {
-      const result = await invokeCmd<FolderExportResult>("cmd_export_folder", {
-        folderId: folder.id,
-        format,
-        exportPath,
-      });
+      const { document, ...result } = await rpc<FolderExportResult & { document: string }>(
+        "cmd_export_folder",
+        { folderId: folder.id, format },
+      );
+      const savedTo = await platform.files.save(suggestedName, new TextEncoder().encode(document), [
+        { name: "JSON", extensions: ["json"] },
+      ]);
+      if (savedTo == null) {
+        return; // Cancelled
+      }
       onHide();
       onSuccess(result);
     } catch (err) {

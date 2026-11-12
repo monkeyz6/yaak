@@ -12,6 +12,7 @@ export type AnyModel =
   | HttpRequest
   | HttpResponse
   | HttpResponseEvent
+  | ImportSource
   | KeyValue
   | Plugin
   | Settings
@@ -110,6 +111,7 @@ export type Folder = {
   settingFollowRedirects: InheritedBoolSetting;
   settingRequestTimeout: InheritedIntSetting;
   settingRequestMessageSize: InheritedIntSetting;
+  settingHttpVersion: InheritedHttpVersionSetting;
 };
 
 export type GraphQlIntrospection = {
@@ -215,6 +217,7 @@ export type HttpRequest = {
   settingValidateCertificates: InheritedBoolSetting;
   settingFollowRedirects: InheritedBoolSetting;
   settingRequestTimeout: InheritedIntSetting;
+  settingHttpVersion: InheritedHttpVersionSetting;
 };
 
 export type HttpRequestHeader = { enabled?: boolean; name: string; value: string; id?: string };
@@ -226,7 +229,6 @@ export type HttpResponse = {
   updatedAt: string;
   workspaceId: string;
   requestId: string;
-  bodyPath: string | null;
   contentLength: number | null;
   contentLengthCompressed: number | null;
   elapsed: number;
@@ -315,6 +317,23 @@ export type HttpResponseHeader = { name: string; value: string };
 
 export type HttpResponseState = "initialized" | "connected" | "closed";
 
+/**
+ * The resolved send settings, values only: what an executor has to obey, with the sources
+ * (which model each came from) left behind in [`ResolvedHttpRequestSettings`]. This is what
+ * crosses from a tab to the Yaak server, and what the server reads.
+ */
+export type HttpSendSettings = {
+  validateCertificates: boolean;
+  followRedirects: boolean;
+  /**
+   * Milliseconds. Zero or negative means no timeout.
+   */
+  timeoutMs: number;
+  sendCookies: boolean;
+  storeCookies: boolean;
+  httpVersion: HttpVersion;
+};
+
 export type HttpUrlParameter = {
   enabled?: boolean;
   /**
@@ -326,7 +345,40 @@ export type HttpUrlParameter = {
   id?: string;
 };
 
+export type HttpVersion = "auto" | "http1" | "http2";
+
+export type ImportSource = {
+  model: "import_source";
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  workspaceId: string;
+  importer: string;
+  origin: string;
+  originLabel: string;
+  lastImportedAt: string;
+};
+
+export type ImportSourceResource = {
+  model: "import_source_resource";
+  createdAt: string;
+  updatedAt: string;
+  importSourceId: string;
+  sourceKey: string;
+  modelType: string;
+  /**
+   * `None` once the user has decided not to import this key
+   */
+  modelId?: string;
+  /**
+   * Hash of the resource as last applied or decided from the source, if one was recorded
+   */
+  contentHash?: string;
+};
+
 export type InheritedBoolSetting = { enabled?: boolean; value: boolean };
+
+export type InheritedHttpVersionSetting = { enabled?: boolean; value: HttpVersion };
 
 export type InheritedIntSetting = { enabled?: boolean; value: number };
 
@@ -537,6 +589,7 @@ export type Workspace = {
   settingDnsOverrides: Array<DnsOverride>;
   settingSendCookies: boolean;
   settingStoreCookies: boolean;
+  settingHttpVersion: HttpVersion;
 };
 
 export type WorkspaceMeta = {

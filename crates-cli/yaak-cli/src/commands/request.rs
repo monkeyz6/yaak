@@ -424,8 +424,8 @@ fn create(
         )?;
 
         let created = ctx
-            .db()
-            .upsert_http_request(&request, &UpdateSource::Sync)
+            .query_manager()
+            .with_tx(|tx| tx.upsert_http_request(&request, &UpdateSource::Sync))
             .map_err(|e| format!("Failed to create request: {e}"))?;
 
         println!("Created request: {}", created.id);
@@ -435,19 +435,16 @@ fn create(
     let workspace_id = resolve_workspace_id(ctx, workspace_id_arg.as_deref(), "request create")?;
     let name = name.unwrap_or_default();
     let url = url.unwrap_or_default();
-    let method = method.unwrap_or_else(|| "GET".to_string());
-
-    let request = HttpRequest {
-        workspace_id,
-        name,
-        method: method.to_uppercase(),
-        url,
-        ..Default::default()
-    };
+    let mut request = HttpRequest { workspace_id, name, url, ..Default::default() };
+    // Only override the method when one was given; `HttpRequest::default()` is the
+    // single place the fallback ("GET") is defined.
+    if let Some(method) = method {
+        request.method = method.to_uppercase();
+    }
 
     let created = ctx
-        .db()
-        .upsert_http_request(&request, &UpdateSource::Sync)
+        .query_manager()
+        .with_tx(|tx| tx.upsert_http_request(&request, &UpdateSource::Sync))
         .map_err(|e| format!("Failed to create request: {e}"))?;
 
     println!("Created request: {}", created.id);
@@ -466,8 +463,8 @@ fn update(ctx: &CliContext, json: Option<String>, json_input: Option<String>) ->
     let updated = apply_merge_patch(&existing, &patch, &id, "request update")?;
 
     let saved = ctx
-        .db()
-        .upsert_http_request(&updated, &UpdateSource::Sync)
+        .query_manager()
+        .with_tx(|tx| tx.upsert_http_request(&updated, &UpdateSource::Sync))
         .map_err(|e| format!("Failed to update request: {e}"))?;
 
     println!("Updated request: {}", saved.id);
@@ -490,8 +487,8 @@ fn delete(ctx: &CliContext, request_id: &str, yes: bool) -> CommandResult {
     }
 
     let deleted = ctx
-        .db()
-        .delete_http_request_by_id(request_id, &UpdateSource::Sync)
+        .query_manager()
+        .with_tx(|tx| tx.delete_http_request_by_id(request_id, &UpdateSource::Sync))
         .map_err(|e| format!("Failed to delete request: {e}"))?;
     println!("Deleted request: {}", deleted.id);
     Ok(())
@@ -585,7 +582,7 @@ async fn send_http_request_by_id(
         encryption_manager: ctx.encryption_manager.clone(),
         plugin_context: &plugin_context,
         cancelled_rx: None,
-        connection_manager: None,
+        connection_manager: ctx.connection_manager(),
     })
     .await;
 

@@ -87,4 +87,115 @@ describe("importer-postman", () => {
       }),
     ]);
   });
+
+  test("Keys items by their Postman ID, unchanged by a rename", () => {
+    const collection = (requestName: string) =>
+      JSON.stringify({
+        info: {
+          _postman_id: "collection-id",
+          name: "Keys",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: [
+          {
+            id: "folder-id",
+            name: "Folder",
+            item: [
+              {
+                id: "request-id",
+                name: requestName,
+                request: { method: "GET", url: "https://yaak.app" },
+              },
+            ],
+          },
+        ],
+      });
+
+    const before = convertPostman(collection("Original"));
+    const after = convertPostman(collection("Renamed"));
+
+    const keyOf = (result: ReturnType<typeof convertPostman>, id: string | undefined) =>
+      id == null ? undefined : result?.sourceKeys?.[id];
+
+    expect(keyOf(before, before?.resources.httpRequests[0]?.id)).toBe("item:request-id");
+    expect(keyOf(after, after?.resources.httpRequests[0]?.id)).toBe("item:request-id");
+    expect(keyOf(before, before?.resources.folders[0]?.id)).toBe("item:folder-id");
+    expect(keyOf(before, before?.resources.workspaces[0]?.id)).toBe("collection:collection-id");
+  });
+
+  test("Falls back to the default OAuth 1 signature method for unrecognized ones", () => {
+    const result = convertPostman(
+      JSON.stringify({
+        info: {
+          name: "OAuth 1 Signature",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: [
+          {
+            name: "Request",
+            request: {
+              method: "GET",
+              url: "https://yaak.app",
+              auth: {
+                type: "oauth1",
+                oauth1: [{ key: "signatureMethod", value: "HMAC-SHA384" }],
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result?.resources.httpRequests).toEqual([
+      expect.objectContaining({
+        authenticationType: "oauth1",
+        authentication: { signatureMethod: "HMAC-SHA1" },
+      }),
+    ]);
+  });
+
+  test("Leaves {{constructor}} alone instead of reaching Object.prototype", () => {
+    const result = convertPostman(
+      JSON.stringify({
+        info: {
+          name: "Prototype Key",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: [
+          {
+            name: "Request",
+            request: {
+              method: "GET",
+              url: "https://yaak.app",
+              header: [
+                { key: "X-A", value: "{{constructor}}" },
+                { key: "X-B", value: "{{toString}}" },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result?.resources.httpRequests[0]?.headers).toEqual([
+      { name: "X-A", value: "${[constructor]}", enabled: true },
+      { name: "X-B", value: "${[toString]}", enabled: true },
+    ]);
+  });
+
+  test("Omits keys for items the collection never identified", () => {
+    const result = convertPostman(
+      JSON.stringify({
+        info: {
+          name: "No IDs",
+          schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: [{ name: "Request", request: { method: "GET", url: "https://yaak.app" } }],
+      }),
+    );
+
+    const requestId = result?.resources.httpRequests[0]?.id;
+    expect(requestId).toBeDefined();
+    expect(result?.sourceKeys).not.toHaveProperty(requestId as string);
+  });
 });

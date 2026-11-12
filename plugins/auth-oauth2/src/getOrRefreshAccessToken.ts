@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
 import type { Context, HttpRequest } from "@yaakapp/api";
+import type { CustomRequestParams } from "./customParams";
+import { mergeFormParams, mergeHeaders } from "./customParams";
 import type { AccessToken, AccessTokenRawResponse, TokenStoreArgs } from "./store";
 import { deleteToken, getToken, storeToken } from "./store";
 import { isTokenExpired } from "./util";
@@ -15,6 +16,7 @@ export async function getOrRefreshAccessToken(
     clientSecret,
     tokenName,
     forceRefresh,
+    custom,
   }: {
     scope: string | null;
     accessTokenUrl: string;
@@ -23,6 +25,7 @@ export async function getOrRefreshAccessToken(
     clientSecret: string;
     tokenName?: "access_token" | "id_token";
     forceRefresh?: boolean;
+    custom?: CustomRequestParams;
   },
 ): Promise<AccessToken | null> {
   const token = await getToken(ctx, tokenArgs);
@@ -70,8 +73,14 @@ export async function getOrRefreshAccessToken(
     httpRequest.headers?.push({ name: "Authorization", value });
   }
 
+  // Merged last so custom entries override the credential headers and params above
+  if (custom) {
+    httpRequest.headers = mergeHeaders(httpRequest.headers ?? [], custom.headers);
+    httpRequest.body = { form: mergeFormParams(httpRequest.body?.form ?? [], custom.body) };
+  }
+
   httpRequest.authenticationType = "none"; // Don't inherit workspace auth
-  const resp = await ctx.httpRequest.send({ httpRequest });
+  const { httpResponse: resp, body: responseBody } = await ctx.httpRequest.send({ httpRequest });
 
   if (resp.error) {
     throw new Error(`Failed to refresh access token: ${resp.error}`);
@@ -85,7 +94,9 @@ export async function getOrRefreshAccessToken(
     return null;
   }
 
-  const body = resp.bodyPath ? readFileSync(resp.bodyPath, "utf8") : "";
+  // Sent ad-hoc, so this body came back with the response rather than being
+  // saved anywhere to read later.
+  const body = await responseBody.text();
 
   console.log("[oauth2] Got refresh token response", resp.status);
 

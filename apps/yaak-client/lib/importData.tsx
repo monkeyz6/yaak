@@ -1,15 +1,40 @@
+import {
+  type BatchUpsertResult,
+  type ImportDestination,
+  type ImportPlan,
+  type ImportSource,
+  workspacesAtom,
+} from "@yaakapp-internal/models";
 import { i18n } from "@yaakapp-internal/i18n";
-import type { BatchUpsertResult } from "@yaakapp-internal/models";
 import { FormattedError, VStack } from "@yaakapp-internal/ui";
 import { Button } from "../components/core/Button";
 import { ImportDataDialog } from "../components/ImportDataDialog";
+import type { ImportSourcePath } from "../components/ImportSourceList";
 import { activeWorkspaceAtom } from "../hooks/useActiveWorkspace";
 import { createFastMutation } from "../hooks/useFastMutation";
 import { showAlert } from "./alert";
 import { showDialog } from "./dialog";
 import { jotaiStore } from "./jotai";
 import { router } from "./router";
-import { invokeCmd } from "./tauri";
+import { rpc } from "./rpc";
+
+// Stable identities so the dialog's effects don't re-run (and cancel in-flight
+// fetches) every time the dialog container re-renders.
+const planSources = (sources: ImportSourcePath[], destination: ImportDestination) =>
+  rpc<ImportPlan>("cmd_import_data", {
+    filePaths: sources.filter((source) => source.kind !== "url").map((source) => source.path),
+    urls: sources.filter((source) => source.kind === "url").map((source) => source.path),
+    destination,
+  });
+const detectSource = (source: ImportSourcePath) =>
+  rpc<string>(
+    "cmd_detect_import_source",
+    source.kind === "url" ? { url: source.path } : { filePath: source.path },
+  );
+const listSources = (workspaceId: string) =>
+  rpc<ImportSource[]>("cmd_list_import_sources", { workspaceId });
+const findSourcesForOrigin = (args: { filePath?: string; url?: string }) =>
+  rpc<ImportSource[]>("cmd_import_sources_for_origin", args);
 
 export const importData = createFastMutation({
   mutationKey: ["import_data"],
@@ -23,25 +48,42 @@ export const importData = createFastMutation({
   },
   mutationFn: async () => {
     return new Promise<void>((resolve, reject) => {
+      const currentWorkspace = jotaiStore.get(activeWorkspaceAtom);
+      const workspaces = jotaiStore.get(workspacesAtom);
       showDialog({
         id: "import",
         title: i18n.t("mainMenu.importData"),
-        size: "sm",
+        size: "lg",
+        className: "h-[36rem]",
+        disableClose: true,
         render: ({ hide }) => {
-          const importAndHide = async (filePath: string) => {
-            try {
-              const didImport = await performImport(filePath);
-              if (!didImport) {
-                return;
-              }
-              resolve();
-            } catch (err) {
-              reject(err);
-            } finally {
-              hide();
-            }
+          const cancel = () => {
+            hide();
+            resolve();
           };
-          return <ImportDataDialog importData={importAndHide} />;
+          const fail = (err: unknown) => {
+            hide();
+            reject(err);
+          };
+          const commit = async (plan: ImportPlan) => {
+            const imported = await rpc<BatchUpsertResult>("cmd_commit_import", { plan });
+            hide();
+            await finishImport(imported);
+            resolve();
+          };
+          return (
+            <ImportDataDialog
+              currentWorkspace={currentWorkspace}
+              workspaces={workspaces}
+              planSources={planSources}
+              detectSource={detectSource}
+              listSources={listSources}
+              findSourcesForOrigin={findSourcesForOrigin}
+              commit={commit}
+              cancel={cancel}
+              onError={fail}
+            />
+          );
         },
       });
     });
@@ -52,13 +94,7 @@ function importedCountLabel(oneKey: string, manyKey: string, count: number): str
   return count === 1 ? i18n.t(oneKey, { count }) : i18n.t(manyKey, { count });
 }
 
-async function performImport(filePath: string): Promise<boolean> {
-  const activeWorkspace = jotaiStore.get(activeWorkspaceAtom);
-  const imported = await invokeCmd<BatchUpsertResult>("cmd_import_data", {
-    filePath,
-    workspaceId: activeWorkspace?.id,
-  });
-
+async function finishImport(imported: BatchUpsertResult): Promise<void> {
   const importedWorkspace = imported.workspaces[0];
 
   showDialog({
@@ -143,6 +179,4 @@ async function performImport(filePath: string): Promise<boolean> {
       search: { environment_id: environmentId },
     });
   }
-
-  return true;
 }

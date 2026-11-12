@@ -1,6 +1,7 @@
-use crate::client_db::ClientDb;
+use crate::client_db::{ClientDb, WriteDb};
 use crate::error::Result;
 use crate::models::{PluginKeyValue, PluginKeyValueIden};
+use sea_query::ExprTrait;
 use sea_query::Keyword::CurrentTimestamp;
 use sea_query::{Asterisk, Cond, Expr, OnConflict, Query, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
@@ -21,7 +22,9 @@ impl<'a> ClientDb<'a> {
             .query_row(sql.as_str(), &*params.as_params(), |row| row.try_into())
             .ok()
     }
+}
 
+impl<'a> WriteDb<'a> {
     pub fn set_plugin_key_value(
         &self,
         plugin_name: &str,

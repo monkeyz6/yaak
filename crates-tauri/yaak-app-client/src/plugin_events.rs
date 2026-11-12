@@ -7,6 +7,8 @@ use crate::{
     call_frontend, cookie_jar_from_window, environment_from_window, get_window_from_plugin_context,
     workspace_from_window,
 };
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use chrono::Utc;
 use log::error;
 use std::sync::Arc;
@@ -16,6 +18,7 @@ use tauri_plugin_opener::OpenerExt;
 use yaak::plugin_events::{
     GroupedPluginEvent, HostRequest, SharedPluginEventContext, handle_shared_plugin_event,
 };
+use yaak::response_body::FileResponseBodyStore;
 use yaak_crypto::manager::EncryptionManager;
 use yaak_http::cookies::get_cookie_value_from_jar;
 use yaak_models::models::{HttpResponse, Plugin};
@@ -29,7 +32,6 @@ use yaak_plugins::events::{
     ShowToastRequest, TemplateRenderResponse, WindowInfoResponse, WindowNavigateEvent,
     WorkspaceInfo,
 };
-use yaak_plugins::manager::PluginManager;
 use yaak_plugins::plugin_handle::PluginHandle;
 use yaak_plugins::template_callback::PluginTemplateCallback;
 use yaak_tauri_utils::window::WorkspaceWindowTrait;
@@ -54,6 +56,7 @@ pub(crate) async fn handle_plugin_event<R: Runtime>(
 
     match handle_shared_plugin_event(
         app_handle.db_manager().inner(),
+        &FileResponseBodyStore::new(app_handle.db_manager().inner()),
         &event.payload,
         SharedPluginEventContext {
             plugin_name: &plugin_name,
@@ -108,7 +111,7 @@ async fn handle_host_plugin_request<R: Runtime>(
                 }
 
                 let new_plugin = Plugin { updated_at: Utc::now().naive_utc(), ..plugin };
-                app_handle.db().upsert_plugin(&new_plugin, &UpdateSource::Plugin)?;
+                app_handle.with_tx(|tx| tx.upsert_plugin(&new_plugin, &UpdateSource::Plugin))?;
             }
 
             if !req.silent {
@@ -201,7 +204,7 @@ async fn handle_host_plugin_request<R: Runtime>(
                 req.grpc_request.folder_id.as_deref(),
                 environment_id.as_deref(),
             )?;
-            let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
+            let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(app_handle).await?);
             let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
             let cb = PluginTemplateCallback::new(
                 plugin_manager,
@@ -227,7 +230,7 @@ async fn handle_host_plugin_request<R: Runtime>(
                 req.http_request.folder_id.as_deref(),
                 environment_id.as_deref(),
             )?;
-            let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
+            let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(app_handle).await?);
             let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
             let cb = PluginTemplateCallback::new(
                 plugin_manager,
@@ -263,7 +266,7 @@ async fn handle_host_plugin_request<R: Runtime>(
                 folder_id.as_deref(),
                 environment_id.as_deref(),
             )?;
-            let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
+            let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(app_handle).await?);
             let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
             let cb = PluginTemplateCallback::new(
                 plugin_manager,
@@ -281,25 +284,41 @@ async fn handle_host_plugin_request<R: Runtime>(
             let workspace =
                 workspace_from_window(&window).expect("Failed to get workspace_id from window URL");
             let cookie_jar = cookie_jar_from_window(&window);
-            let environment = environment_from_window(&window);
 
             if http_request.workspace_id.is_empty() {
-                http_request.workspace_id = workspace.id;
+                http_request.workspace_id = workspace.id.clone();
             }
+
+            let environment =
+                if let Some(environment_id) = req.environment_id.as_deref() {
+                    if http_request.workspace_id != workspace.id {
+                        return Err(crate::error::Error::GenericError(
+                            "HTTP request does not belong to the selected workspace".to_string(),
+                        ));
+                    }
+                    Some(window.db().get_environment_for_workspace(
+                        &http_request.workspace_id,
+                        environment_id,
+                    )?)
+                } else {
+                    environment_from_window(&window)
+                };
 
             let http_response = if http_request.id.is_empty() {
                 HttpResponse::default()
             } else {
                 let blobs = window.blob_manager();
-                window.db().upsert_http_response(
-                    &HttpResponse {
-                        request_id: http_request.id.clone(),
-                        workspace_id: http_request.workspace_id.clone(),
-                        ..Default::default()
-                    },
-                    &UpdateSource::from_window_label(window.label()),
-                    &blobs,
-                )?
+                window.with_tx(|tx| {
+                    tx.upsert_http_response(
+                        &HttpResponse {
+                            request_id: http_request.id.clone(),
+                            workspace_id: http_request.workspace_id.clone(),
+                            ..Default::default()
+                        },
+                        &UpdateSource::from_window_label(window.label()),
+                        &blobs,
+                    )
+                })?
             };
 
             let http_response = send_http_request_with_context(
@@ -313,8 +332,13 @@ async fn handle_host_plugin_request<R: Runtime>(
             )
             .await?;
 
+            // An ad-hoc request saves nothing, so the engine hands the body
+            // back and this reply is the only place the plugin can get it.
+            let body = http_response.body.returned_bytes().map(|b| BASE64_STANDARD.encode(b));
+
             Ok(Some(InternalEventPayload::SendHttpRequestResponse(SendHttpRequestResponse {
-                http_response,
+                http_response: http_response.response,
+                body,
             })))
         }
         HostRequest::OpenWindow(req) => {

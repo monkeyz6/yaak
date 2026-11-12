@@ -2,19 +2,18 @@ extern crate core;
 use crate::encoding::read_response_body;
 use crate::error::Error::GenericError;
 use crate::error::Result;
-use crate::grpc::{build_metadata, metadata_to_map, resolve_grpc_request};
-use crate::http_request::{resolve_http_request, send_http_request};
-use crate::import::import_data;
+use crate::grpc::{build_metadata, metadata_to_map};
+use crate::http_request::send_http_request;
+use crate::import::{commit_import, plan_import_data};
 use crate::models_ext::{BlobManagerExt, QueryManagerExt};
 use crate::notifications::YaakNotifier;
-use crate::render::{render_grpc_request, render_json_value, render_template};
+use crate::render::{render_grpc_request, render_template};
 use crate::updates::{UpdateMode, UpdateTrigger, YaakUpdater};
 use crate::uri_scheme::handle_deep_link;
 use error::Result as YaakResult;
 use eventsource_client::{EventParser, SSE};
 use log::{debug, error, info, warn};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,40 +28,31 @@ use tauri_plugin_log::{Builder, Target, TargetKind, log};
 use tokio::sync::Mutex;
 use tokio::task::block_in_place;
 use tokio::time;
-use yaak::export::{self, CollectionFormat, ExportDataParams, ExportFolderParams, ExportFolderResult};
+use yaak::send::ResponseBody;
+use yaak_commands::resolve::resolve_grpc_request;
+use yaak_commands::responses::locate_response_body;
 use yaak_common::command::new_checked_command;
 use yaak_crypto::manager::EncryptionManager;
 use yaak_grpc::manager::{GrpcConfig, GrpcHandle};
 use yaak_grpc::{Code, ServiceDefinition};
 use yaak_mac_window::AppHandleMacWindowExt;
 use yaak_models::models::{
-    AnyModel, CookieJar, Environment, GrpcConnection, GrpcConnectionState, GrpcEvent,
-    GrpcEventType, HttpRequest, HttpResponse, HttpResponseEvent, HttpResponseState, Workspace,
-    WorkspaceMeta,
+    CookieJar, Environment, GrpcConnection, GrpcConnectionState, GrpcEvent, GrpcEventType,
+    HttpRequest, HttpResponse, HttpResponseState, Workspace,
 };
-use yaak_models::util::{BatchUpsertResult, UpdateSource};
+use yaak_models::util::{BatchUpsertResult, ImportDestination, ImportPlan, UpdateSource};
 use yaak_plugins::events::{
-    CallFolderActionArgs, CallFolderActionRequest, CallGrpcRequestActionArgs,
-    CallGrpcRequestActionRequest, CallHttpRequestActionArgs, CallHttpRequestActionRequest,
-    CallWebsocketRequestActionArgs, CallWebsocketRequestActionRequest, CallWorkspaceActionArgs,
-    CallWorkspaceActionRequest, Color, FilterResponse, GetFolderActionsResponse,
-    GetGrpcRequestActionsResponse, GetHttpAuthenticationConfigResponse,
-    GetHttpAuthenticationSummaryResponse, GetHttpRequestActionsResponse,
-    GetTemplateFunctionConfigResponse, GetTemplateFunctionSummaryResponse,
-    GetWebsocketRequestActionsResponse, GetWorkspaceActionsResponse, InternalEvent,
-    InternalEventPayload, JsonPrimitive, PluginContext, RenderPurpose, ShowToastRequest,
+    Color, ErrorResponse, FilterResponse, InternalEvent, InternalEventPayload, PluginContext,
+    RenderPurpose, ShowToastRequest,
 };
-use yaak_plugins::manager::PluginManager;
-use yaak_plugins::plugin_meta::{PluginMetadata, get_plugin_meta};
 use yaak_plugins::template_callback::PluginTemplateCallback;
+use yaak_rpc_schema::{AppMetaData, EphemeralHttpResponse};
 use yaak_sse::sse::ServerSentEvent;
 use yaak_tauri_utils::window::WorkspaceWindowTrait;
-use yaak_templates::format_json::format_json;
 use yaak_templates::strip_json_comments::strip_json_comments;
-use yaak_templates::{RenderErrorBehavior, RenderOptions, Tokens, transform_args};
+use yaak_templates::{RenderErrorBehavior, RenderOptions};
 use yaak_tls::find_client_certificate;
 
-mod commands;
 mod encoding;
 mod error;
 mod feedback;
@@ -77,6 +67,8 @@ mod notifications;
 mod plugin_events;
 mod plugins_ext;
 mod render;
+mod restart;
+mod rpc_ext;
 mod sync_ext;
 mod updates;
 mod uri_scheme;
@@ -145,6 +137,7 @@ fn setup_window_menu<R: Runtime>(win: &WebviewWindow<R>) -> Result<()> {
             "dev.generate_theme_css" => {
                 w.emit("generate_theme_css", true).unwrap();
             }
+            "dev.show_home" => w.emit("show_home", true).unwrap(),
             "dev.toggle_devtools" => {
                 if webview_window.is_devtools_open() {
                     webview_window.close_devtools();
@@ -160,19 +153,14 @@ fn setup_window_menu<R: Runtime>(win: &WebviewWindow<R>) -> Result<()> {
 }
 
 fn initial_appearance_script<R: Runtime>(app_handle: &AppHandle<R>) -> Option<String> {
-    use yaak_system_appearance::{Appearance, InitialAppearanceSource};
-
-    let settings = app_handle.db().get_settings();
-    let (appearance, source) = match settings.appearance.as_str() {
-        "dark" => (Appearance::Dark, InitialAppearanceSource::Settings),
-        "light" => (Appearance::Light, InitialAppearanceSource::Settings),
-        _ => (
-            yaak_system_appearance::system_appearance()?,
-            InitialAppearanceSource::LinuxSystem,
-        ),
-    };
-
-    Some(yaak_system_appearance::initialization_script(appearance, source))
+    // Only report the appearance the OS prefers. The frontend needs it to resolve the
+    // "automatic" setting, so the configured appearance is never a substitute for it.
+    //
+    // NOTE: The value comes from the watcher state, not a fresh detection, so the frontend
+    //  only ever sees a snapshot when the change events that keep it fresh are also flowing.
+    let state = app_handle.try_state::<yaak_system_appearance::SystemAppearanceState>()?;
+    let appearance = state.last_appearance()?;
+    Some(yaak_system_appearance::initialization_script(appearance))
 }
 
 /// Extension trait for easily creating a PluginContext from a WebviewWindow
@@ -186,22 +174,6 @@ impl<R: Runtime> PluginContextExt<R> for WebviewWindow<R> {
     }
 }
 
-#[derive(serde::Serialize)]
-#[serde(default, rename_all = "camelCase")]
-struct AppMetaData {
-    is_dev: bool,
-    version: String,
-    cli_version: Option<String>,
-    name: String,
-    app_data_dir: String,
-    app_log_dir: String,
-    vendored_plugin_dir: String,
-    default_project_dir: String,
-    feature_updater: bool,
-    feature_license: bool,
-}
-
-#[tauri::command]
 async fn cmd_metadata<R: Runtime>(app_handle: AppHandle<R>) -> YaakResult<AppMetaData> {
     let app_data_dir = app_handle.path().app_data_dir()?;
     let app_log_dir = app_handle.path().app_log_dir()?;
@@ -241,59 +213,6 @@ async fn detect_cli_version_for_binary(program: &str) -> Option<String> {
     Some(parts.next().unwrap_or(line).to_string())
 }
 
-#[tauri::command]
-async fn cmd_template_tokens_to_string<R: Runtime>(
-    window: WebviewWindow<R>,
-    app_handle: AppHandle<R>,
-    tokens: Tokens,
-) -> YaakResult<String> {
-    let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
-    let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
-    let cb = PluginTemplateCallback::new(
-        plugin_manager,
-        encryption_manager,
-        &PluginContext::new(Some(window.label().to_string()), window.workspace_id()),
-        RenderPurpose::Preview,
-    );
-    let new_tokens = transform_args(tokens, &cb)?;
-    Ok(new_tokens.to_string())
-}
-
-#[tauri::command]
-async fn cmd_render_template<R: Runtime>(
-    window: WebviewWindow<R>,
-    app_handle: AppHandle<R>,
-    template: &str,
-    workspace_id: &str,
-    environment_id: Option<&str>,
-    purpose: Option<RenderPurpose>,
-    ignore_error: Option<bool>,
-) -> YaakResult<String> {
-    let environment_chain =
-        app_handle.db().resolve_environments(workspace_id, None, environment_id)?;
-    let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
-    let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
-    let result = render_template(
-        template,
-        environment_chain,
-        &PluginTemplateCallback::new(
-            plugin_manager,
-            encryption_manager,
-            &PluginContext::new(Some(window.label().to_string()), window.workspace_id()),
-            purpose.unwrap_or(RenderPurpose::Preview),
-        ),
-        &RenderOptions {
-            error_behavior: match ignore_error {
-                Some(true) => RenderErrorBehavior::ReturnEmpty,
-                _ => RenderErrorBehavior::Throw,
-            },
-        },
-    )
-    .await?;
-    Ok(result)
-}
-
-#[tauri::command]
 async fn cmd_send_feedback<R: Runtime>(
     app_handle: AppHandle<R>,
     feature: String,
@@ -303,7 +222,6 @@ async fn cmd_send_feedback<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
 async fn cmd_dismiss_notification<R: Runtime>(
     window: WebviewWindow<R>,
     notification_id: &str,
@@ -312,7 +230,6 @@ async fn cmd_dismiss_notification<R: Runtime>(
     Ok(yaak_notifier.lock().await.seen(&window, notification_id).await?)
 }
 
-#[tauri::command]
 async fn cmd_grpc_reflect<R: Runtime>(
     request_id: &str,
     environment_id: Option<&str>,
@@ -322,7 +239,8 @@ async fn cmd_grpc_reflect<R: Runtime>(
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
 ) -> YaakResult<Vec<ServiceDefinition>> {
     let unrendered_request = app_handle.db().get_grpc_request(request_id)?;
-    let (resolved_request, auth_context_id) = resolve_grpc_request(&window, &unrendered_request)?;
+    let (resolved_request, auth_context_id) =
+        resolve_grpc_request(&window.db(), &unrendered_request)?;
 
     let environment_chain = app_handle.db().resolve_environments(
         &unrendered_request.workspace_id,
@@ -332,7 +250,7 @@ async fn cmd_grpc_reflect<R: Runtime>(
     let resolved_settings =
         app_handle.db().resolve_settings_for_grpc_request(&unrendered_request)?;
 
-    let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
+    let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(&app_handle).await?);
     let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
     let req = render_grpc_request(
         &resolved_request,
@@ -373,7 +291,6 @@ async fn cmd_grpc_reflect<R: Runtime>(
         .map_err(|e| GenericError(e.to_string()))?)
 }
 
-#[tauri::command]
 async fn cmd_grpc_go<R: Runtime>(
     request_id: &str,
     environment_id: Option<&str>,
@@ -383,7 +300,8 @@ async fn cmd_grpc_go<R: Runtime>(
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
 ) -> YaakResult<String> {
     let unrendered_request = app_handle.db().get_grpc_request(request_id)?;
-    let (resolved_request, auth_context_id) = resolve_grpc_request(&window, &unrendered_request)?;
+    let (resolved_request, auth_context_id) =
+        resolve_grpc_request(&window.db(), &unrendered_request)?;
     let environment_chain = app_handle.db().resolve_environments(
         &unrendered_request.workspace_id,
         unrendered_request.folder_id.as_deref(),
@@ -392,7 +310,7 @@ async fn cmd_grpc_go<R: Runtime>(
     let resolved_settings =
         app_handle.db().resolve_settings_for_grpc_request(&unrendered_request)?;
 
-    let plugin_manager = Arc::new((*app_handle.state::<PluginManager>()).clone());
+    let plugin_manager = Arc::new(crate::plugins_ext::plugin_manager(&app_handle).await?);
     let encryption_manager = Arc::new((*app_handle.state::<EncryptionManager>()).clone());
     let request = render_grpc_request(
         &resolved_request,
@@ -413,18 +331,20 @@ async fn cmd_grpc_go<R: Runtime>(
     let settings = app_handle.db().get_settings();
     let client_cert = find_client_certificate(&request.url, &settings.client_certificates);
 
-    let conn = app_handle.db().upsert_grpc_connection(
-        &GrpcConnection {
-            workspace_id: request.workspace_id.clone(),
-            request_id: request.id.clone(),
-            status: -1,
-            elapsed: 0,
-            state: GrpcConnectionState::Initialized,
-            url: request.url.clone(),
-            ..Default::default()
-        },
-        &UpdateSource::from_window_label(window.label()),
-    )?;
+    let conn = app_handle.with_tx(|tx| {
+        tx.upsert_grpc_connection(
+            &GrpcConnection {
+                workspace_id: request.workspace_id.clone(),
+                request_id: request.id.clone(),
+                status: -1,
+                elapsed: 0,
+                state: GrpcConnectionState::Initialized,
+                url: request.url.clone(),
+                ..Default::default()
+            },
+            &UpdateSource::from_window_label(window.label()),
+        )
+    })?;
 
     let conn_id = conn.id.clone();
 
@@ -469,15 +389,17 @@ async fn cmd_grpc_go<R: Runtime>(
     let connection = match connection {
         Ok(c) => c,
         Err(err) => {
-            app_handle.db().upsert_grpc_connection(
-                &GrpcConnection {
-                    elapsed: start.elapsed().as_millis() as i32,
-                    error: Some(err.to_string()),
-                    state: GrpcConnectionState::Closed,
-                    ..conn.clone()
-                },
-                &UpdateSource::from_window_label(window.label()),
-            )?;
+            app_handle.with_tx(|tx| {
+                tx.upsert_grpc_connection(
+                    &GrpcConnection {
+                        elapsed: start.elapsed().as_millis() as i32,
+                        error: Some(err.to_string()),
+                        state: GrpcConnectionState::Closed,
+                        ..conn.clone()
+                    },
+                    &UpdateSource::from_window_label(window.label()),
+                )
+            })?;
             return Ok(conn_id);
         }
     };
@@ -578,15 +500,17 @@ async fn cmd_grpc_go<R: Runtime>(
         .await?;
         let msg = strip_json_comments(&msg);
 
-        app_handle.db().upsert_grpc_event(
-            &GrpcEvent {
-                content: format!("Connecting to {}", req.url),
-                event_type: GrpcEventType::ConnectionStart,
-                metadata: metadata.clone(),
-                ..base_event.clone()
-            },
-            &UpdateSource::from_window_label(window.label()),
-        )?;
+        app_handle.with_tx(|tx| {
+            tx.upsert_grpc_event(
+                &GrpcEvent {
+                    content: format!("Connecting to {}", req.url),
+                    event_type: GrpcEventType::ConnectionStart,
+                    metadata: metadata.clone(),
+                    ..base_event.clone()
+                },
+                &UpdateSource::from_window_label(window.label()),
+            )
+        })?;
 
         async move {
             // Create callback for streaming methods that handles both success and error
@@ -596,24 +520,28 @@ async fn cmd_grpc_go<R: Runtime>(
                 let window_label = window.label().to_string();
                 move |result: std::result::Result<String, String>| match result {
                     Ok(msg) => {
-                        let _ = app_handle.db().upsert_grpc_event(
-                            &GrpcEvent {
-                                content: msg,
-                                event_type: GrpcEventType::ClientMessage,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(&window_label),
-                        );
+                        let _ = app_handle.with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    content: msg,
+                                    event_type: GrpcEventType::ClientMessage,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(&window_label),
+                            )
+                        });
                     }
                     Err(error) => {
-                        let _ = app_handle.db().upsert_grpc_event(
-                            &GrpcEvent {
-                                content: format!("Failed to send message: {}", error),
-                                event_type: GrpcEventType::Error,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(&window_label),
-                        );
+                        let _ = app_handle.with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    content: format!("Failed to send message: {}", error),
+                                    event_type: GrpcEventType::Error,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(&window_label),
+                            )
+                        });
                     }
                 }
             };
@@ -666,36 +594,38 @@ async fn cmd_grpc_go<R: Runtime>(
 
             if !method_desc.is_client_streaming() {
                 app_handle
-                    .db()
-                    .upsert_grpc_event(
-                        &GrpcEvent {
-                            event_type: GrpcEventType::ClientMessage,
-                            content: msg,
-                            ..base_event.clone()
-                        },
-                        &UpdateSource::from_window_label(window.label()),
-                    )
+                    .with_tx(|tx| {
+                        tx.upsert_grpc_event(
+                            &GrpcEvent {
+                                event_type: GrpcEventType::ClientMessage,
+                                content: msg,
+                                ..base_event.clone()
+                            },
+                            &UpdateSource::from_window_label(window.label()),
+                        )
+                    })
                     .unwrap();
             }
 
             match maybe_msg {
                 Some(Ok(msg)) => {
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                metadata: metadata_to_map(msg.metadata().clone()),
-                                content: if msg.metadata().len() == 0 {
-                                    "Received response"
-                                } else {
-                                    "Received response with metadata"
-                                }
-                                .to_string(),
-                                event_type: GrpcEventType::Info,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    metadata: metadata_to_map(msg.metadata().clone()),
+                                    content: if msg.metadata().len() == 0 {
+                                        "Received response"
+                                    } else {
+                                        "Received response with metadata"
+                                    }
+                                    .to_string(),
+                                    event_type: GrpcEventType::Info,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                     let response_message = msg.into_inner();
                     let content = match connection
@@ -705,83 +635,88 @@ async fn cmd_grpc_go<R: Runtime>(
                         Ok(content) => content,
                         Err(err) => {
                             app_handle
-                                .db()
-                                .upsert_grpc_event(
-                                    &GrpcEvent {
-                                        content: "Failed to read response".to_string(),
-                                        error: Some(err.to_string()),
-                                        status: Some(Code::Internal as i32),
-                                        event_type: GrpcEventType::ConnectionEnd,
-                                        ..base_event.clone()
-                                    },
-                                    &UpdateSource::from_window_label(window.label()),
-                                )
+                                .with_tx(|tx| {
+                                    tx.upsert_grpc_event(
+                                        &GrpcEvent {
+                                            content: "Failed to read response".to_string(),
+                                            error: Some(err.to_string()),
+                                            status: Some(Code::Internal as i32),
+                                            event_type: GrpcEventType::ConnectionEnd,
+                                            ..base_event.clone()
+                                        },
+                                        &UpdateSource::from_window_label(window.label()),
+                                    )
+                                })
                                 .unwrap();
                             return;
                         }
                     };
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                content,
-                                event_type: GrpcEventType::ServerMessage,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    content,
+                                    event_type: GrpcEventType::ServerMessage,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                content: "Connection complete".to_string(),
-                                event_type: GrpcEventType::ConnectionEnd,
-                                status: Some(Code::Ok as i32),
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    content: "Connection complete".to_string(),
+                                    event_type: GrpcEventType::ConnectionEnd,
+                                    status: Some(Code::Ok as i32),
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                 }
                 Some(Err(yaak_grpc::error::Error::GrpcStreamError(e))) => {
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &(match e.status {
-                                Some(s) => GrpcEvent {
-                                    error: Some(s.message().to_string()),
-                                    status: Some(s.code() as i32),
-                                    content: "Request failed".to_string(),
-                                    metadata: metadata_to_map(s.metadata().clone()),
-                                    event_type: GrpcEventType::ConnectionEnd,
-                                    ..base_event.clone()
-                                },
-                                None => GrpcEvent {
-                                    error: Some(e.message),
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &(match e.status {
+                                    Some(s) => GrpcEvent {
+                                        error: Some(s.message().to_string()),
+                                        status: Some(s.code() as i32),
+                                        content: "Request failed".to_string(),
+                                        metadata: metadata_to_map(s.metadata().clone()),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                    None => GrpcEvent {
+                                        error: Some(e.message),
+                                        status: Some(Code::Unknown as i32),
+                                        content: "Request failed".to_string(),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                }),
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
+                        .unwrap();
+                }
+                Some(Err(e)) => {
+                    app_handle
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    error: Some(e.to_string()),
                                     status: Some(Code::Unknown as i32),
                                     content: "Request failed".to_string(),
                                     event_type: GrpcEventType::ConnectionEnd,
                                     ..base_event.clone()
                                 },
-                            }),
-                            &UpdateSource::from_window_label(window.label()),
-                        )
-                        .unwrap();
-                }
-                Some(Err(e)) => {
-                    app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                error: Some(e.to_string()),
-                                status: Some(Code::Unknown as i32),
-                                content: "Request failed".to_string(),
-                                event_type: GrpcEventType::ConnectionEnd,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                 }
                 None => {
@@ -792,64 +727,67 @@ async fn cmd_grpc_go<R: Runtime>(
             let mut stream = match maybe_stream {
                 Some(Ok(stream)) => {
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                metadata: metadata_to_map(stream.metadata().clone()),
-                                content: if stream.metadata().len() == 0 {
-                                    "Received response"
-                                } else {
-                                    "Received response with metadata"
-                                }
-                                .to_string(),
-                                event_type: GrpcEventType::Info,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    metadata: metadata_to_map(stream.metadata().clone()),
+                                    content: if stream.metadata().len() == 0 {
+                                        "Received response"
+                                    } else {
+                                        "Received response with metadata"
+                                    }
+                                    .to_string(),
+                                    event_type: GrpcEventType::Info,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                     stream.into_inner()
                 }
                 Some(Err(yaak_grpc::error::Error::GrpcStreamError(e))) => {
                     warn!("GRPC stream error {e:?}");
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &(match e.status {
-                                Some(s) => GrpcEvent {
-                                    error: Some(s.message().to_string()),
-                                    status: Some(s.code() as i32),
-                                    content: "Stream failed".to_string(),
-                                    metadata: metadata_to_map(s.metadata().clone()),
-                                    event_type: GrpcEventType::ConnectionEnd,
-                                    ..base_event.clone()
-                                },
-                                None => GrpcEvent {
-                                    error: Some(e.message),
-                                    status: Some(Code::Unknown as i32),
-                                    content: "Stream failed".to_string(),
-                                    event_type: GrpcEventType::ConnectionEnd,
-                                    ..base_event.clone()
-                                },
-                            }),
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &(match e.status {
+                                    Some(s) => GrpcEvent {
+                                        error: Some(s.message().to_string()),
+                                        status: Some(s.code() as i32),
+                                        content: "Stream failed".to_string(),
+                                        metadata: metadata_to_map(s.metadata().clone()),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                    None => GrpcEvent {
+                                        error: Some(e.message),
+                                        status: Some(Code::Unknown as i32),
+                                        content: "Stream failed".to_string(),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                }),
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                     return;
                 }
                 Some(Err(e)) => {
                     app_handle
-                        .db()
-                        .upsert_grpc_event(
-                            &GrpcEvent {
-                                error: Some(e.to_string()),
-                                status: Some(Code::Unknown as i32),
-                                content: "Stream failed".to_string(),
-                                event_type: GrpcEventType::ConnectionEnd,
-                                ..base_event.clone()
-                            },
-                            &UpdateSource::from_window_label(window.label()),
-                        )
+                        .with_tx(|tx| {
+                            tx.upsert_grpc_event(
+                                &GrpcEvent {
+                                    error: Some(e.to_string()),
+                                    status: Some(Code::Unknown as i32),
+                                    content: "Stream failed".to_string(),
+                                    event_type: GrpcEventType::ConnectionEnd,
+                                    ..base_event.clone()
+                                },
+                                &UpdateSource::from_window_label(window.label()),
+                            )
+                        })
                         .unwrap();
                     return;
                 }
@@ -866,65 +804,69 @@ async fn cmd_grpc_go<R: Runtime>(
                             Ok(message) => message,
                             Err(err) => {
                                 app_handle
-                                    .db()
-                                    .upsert_grpc_event(
-                                        &GrpcEvent {
-                                            content: "Failed to read response".to_string(),
-                                            error: Some(err.to_string()),
-                                            status: Some(Code::Internal as i32),
-                                            event_type: GrpcEventType::ConnectionEnd,
-                                            ..base_event.clone()
-                                        },
-                                        &UpdateSource::from_window_label(window.label()),
-                                    )
+                                    .with_tx(|tx| {
+                                        tx.upsert_grpc_event(
+                                            &GrpcEvent {
+                                                content: "Failed to read response".to_string(),
+                                                error: Some(err.to_string()),
+                                                status: Some(Code::Internal as i32),
+                                                event_type: GrpcEventType::ConnectionEnd,
+                                                ..base_event.clone()
+                                            },
+                                            &UpdateSource::from_window_label(window.label()),
+                                        )
+                                    })
                                     .unwrap();
                                 break;
                             }
                         };
                         app_handle
-                            .db()
-                            .upsert_grpc_event(
-                                &GrpcEvent {
-                                    content: message,
-                                    event_type: GrpcEventType::ServerMessage,
-                                    ..base_event.clone()
-                                },
-                                &UpdateSource::from_window_label(window.label()),
-                            )
+                            .with_tx(|tx| {
+                                tx.upsert_grpc_event(
+                                    &GrpcEvent {
+                                        content: message,
+                                        event_type: GrpcEventType::ServerMessage,
+                                        ..base_event.clone()
+                                    },
+                                    &UpdateSource::from_window_label(window.label()),
+                                )
+                            })
                             .unwrap();
                     }
                     Ok(None) => {
                         let trailers =
                             stream.trailers().await.unwrap_or_default().unwrap_or_default();
                         app_handle
-                            .db()
-                            .upsert_grpc_event(
-                                &GrpcEvent {
-                                    content: "Connection complete".to_string(),
-                                    status: Some(Code::Ok as i32),
-                                    metadata: metadata_to_map(trailers),
-                                    event_type: GrpcEventType::ConnectionEnd,
-                                    ..base_event.clone()
-                                },
-                                &UpdateSource::from_window_label(window.label()),
-                            )
+                            .with_tx(|tx| {
+                                tx.upsert_grpc_event(
+                                    &GrpcEvent {
+                                        content: "Connection complete".to_string(),
+                                        status: Some(Code::Ok as i32),
+                                        metadata: metadata_to_map(trailers),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                    &UpdateSource::from_window_label(window.label()),
+                                )
+                            })
                             .unwrap();
                         break;
                     }
                     Err(status) => {
                         app_handle
-                            .db()
-                            .upsert_grpc_event(
-                                &GrpcEvent {
-                                    content: "Stream failed".to_string(),
-                                    error: Some(status.message().to_string()),
-                                    status: Some(status.code() as i32),
-                                    metadata: metadata_to_map(status.metadata().clone()),
-                                    event_type: GrpcEventType::ConnectionEnd,
-                                    ..base_event.clone()
-                                },
-                                &UpdateSource::from_window_label(window.label()),
-                            )
+                            .with_tx(|tx| {
+                                tx.upsert_grpc_event(
+                                    &GrpcEvent {
+                                        content: "Stream failed".to_string(),
+                                        error: Some(status.message().to_string()),
+                                        status: Some(status.code() as i32),
+                                        metadata: metadata_to_map(status.metadata().clone()),
+                                        event_type: GrpcEventType::ConnectionEnd,
+                                        ..base_event.clone()
+                                    },
+                                    &UpdateSource::from_window_label(window.label()),
+                                )
+                            })
                             .unwrap();
                         break;
                     }
@@ -957,21 +899,24 @@ async fn cmd_grpc_go<R: Runtime>(
                     }).unwrap();
                 },
                 _ = cancelled_rx.changed() => {
-                    w.db().upsert_grpc_event(
-                        &GrpcEvent {
-                            content: "Cancelled".to_string(),
-                            event_type: GrpcEventType::ConnectionEnd,
-                            status: Some(Code::Cancelled as i32),
-                            ..base_msg.clone()
-                        },
-                        &UpdateSource::from_window_label(window.label()),
-                    ).unwrap();
+                    w.with_tx(|tx| {
+                        tx.upsert_grpc_event(
+                            &GrpcEvent {
+                                content: "Cancelled".to_string(),
+                                event_type: GrpcEventType::ConnectionEnd,
+                                status: Some(Code::Cancelled as i32),
+                                ..base_msg.clone()
+                            },
+                            &UpdateSource::from_window_label(window.label()),
+                        )
+                    })
+                    .unwrap();
                     w.with_tx(|c| {
                         c.upsert_grpc_connection(
                             &GrpcConnection{
-                            elapsed: start.elapsed().as_millis() as i32,
-                            status: Code::Cancelled as i32,
-                            state: GrpcConnectionState::Closed,
+                                elapsed: start.elapsed().as_millis() as i32,
+                                status: Code::Cancelled as i32,
+                                state: GrpcConnectionState::Closed,
                                 ..c.get_grpc_connection( &conn_id).unwrap().clone()
                             },
                             &UpdateSource::from_window_label(window.label()),
@@ -986,20 +931,23 @@ async fn cmd_grpc_go<R: Runtime>(
     Ok(conn.id)
 }
 
-#[tauri::command]
 async fn cmd_restart<R: Runtime>(app_handle: AppHandle<R>) -> YaakResult<()> {
-    app_handle.request_restart();
+    restart::request_restart(&app_handle);
     Ok(())
 }
 
-#[tauri::command]
+/// Send without saving anything.
+///
+/// The response never reaches the database, so its body cannot be read back by
+/// id later the way a saved response's can. It comes back here instead, which
+/// is the only copy the caller gets.
 async fn cmd_send_ephemeral_request<R: Runtime>(
     mut request: HttpRequest,
     environment_id: Option<&str>,
     cookie_jar_id: Option<&str>,
     window: WebviewWindow<R>,
     app_handle: AppHandle<R>,
-) -> YaakResult<HttpResponse> {
+) -> YaakResult<EphemeralHttpResponse> {
     let response = HttpResponse::default();
     request.id = "".to_string();
     let environment = match environment_id {
@@ -1018,15 +966,20 @@ async fn cmd_send_ephemeral_request<R: Runtime>(
         }
     });
 
-    send_http_request(&window, &request, &response, environment, cookie_jar, &mut cancel_rx).await
+    let sent =
+        send_http_request(&window, &request, &response, environment, cookie_jar, &mut cancel_rx)
+            .await?;
+
+    // Blanking the request id above is what makes this send unsaved, so the
+    // engine always hands the body back. Failing loudly beats returning an
+    // empty body that reads as "the server sent nothing".
+    let ResponseBody::Returned(body) = sent.body else {
+        return Err(GenericError("Unsaved response did not return a body".to_string()));
+    };
+
+    Ok(EphemeralHttpResponse { response: sent.response, body })
 }
 
-#[tauri::command]
-async fn cmd_format_json(text: &str) -> YaakResult<String> {
-    Ok(format_json(text, "  "))
-}
-
-#[tauri::command]
 async fn cmd_format_graphql(text: &str) -> YaakResult<String> {
     match pretty_graphql::format_text(text, &Default::default()) {
         Ok(formatted) => Ok(formatted),
@@ -1034,60 +987,39 @@ async fn cmd_format_graphql(text: &str) -> YaakResult<String> {
     }
 }
 
-#[tauri::command]
 async fn cmd_http_response_body<R: Runtime>(
     window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-    response: HttpResponse,
+    response_id: &str,
     filter: Option<&str>,
 ) -> YaakResult<FilterResponse> {
-    let body_path = match response.body_path {
-        None => {
-            return Ok(FilterResponse { content: String::new(), error: None });
-        }
-        Some(p) => p,
+    let location = locate_response_body(&window.db(), response_id)?;
+    let Some(body_path) = location.path else {
+        return Ok(FilterResponse { content: String::new(), error: None });
     };
 
-    let content_type = response
-        .headers
-        .iter()
-        .find_map(|h| {
-            if h.name.eq_ignore_ascii_case("content-type") { Some(h.value.as_str()) } else { None }
-        })
-        .unwrap_or_default();
-
+    let content_type = location.content_type.as_str();
     let body = read_response_body(&body_path, content_type)
         .await
         .ok_or(GenericError("Failed to find response body".to_string()))?;
 
     match filter {
-        Some(filter) if !filter.is_empty() => Ok(plugin_manager
+        Some(filter) if !filter.is_empty() => Ok(plugins_ext::plugin_manager(&window)
+            .await?
             .filter_data(&window.plugin_context(), filter, &body, content_type)
             .await?),
         _ => Ok(FilterResponse { content: body, error: None }),
     }
 }
 
-#[tauri::command]
-async fn cmd_http_request_body<R: Runtime>(
+async fn cmd_get_sse_events<R: Runtime>(
     app_handle: AppHandle<R>,
     response_id: &str,
-) -> YaakResult<Option<Vec<u8>>> {
-    let body_id = format!("{}.request", response_id);
-    let chunks = app_handle.blobs().get_chunks(&body_id)?;
+) -> YaakResult<Vec<ServerSentEvent>> {
+    let Some(body_path) = locate_response_body(&app_handle.db(), response_id)?.path else {
+        return Ok(Vec::new());
+    };
 
-    if chunks.is_empty() {
-        return Ok(None);
-    }
-
-    // Concatenate all chunks
-    let body: Vec<u8> = chunks.into_iter().flat_map(|c| c.data).collect();
-    Ok(Some(body))
-}
-
-#[tauri::command]
-async fn cmd_get_sse_events(file_path: &str) -> YaakResult<Vec<ServerSentEvent>> {
-    let body = fs::read(file_path)?;
+    let body = fs::read(body_path)?;
     let mut event_parser = EventParser::new();
     event_parser.process_bytes(body.into())?;
 
@@ -1106,347 +1038,20 @@ async fn cmd_get_sse_events(file_path: &str) -> YaakResult<Vec<ServerSentEvent>>
     Ok(events)
 }
 
-#[tauri::command]
-async fn cmd_get_http_response_events<R: Runtime>(
-    app_handle: AppHandle<R>,
-    response_id: &str,
-) -> YaakResult<Vec<HttpResponseEvent>> {
-    let events: Vec<HttpResponseEvent> = app_handle.db().list_http_response_events(response_id)?;
-    Ok(events)
-}
-
-#[tauri::command]
 async fn cmd_import_data<R: Runtime>(
     window: WebviewWindow<R>,
-    file_path: &str,
+    file_paths: &[String],
+    urls: &[String],
+    destination: ImportDestination,
+) -> YaakResult<ImportPlan> {
+    plan_import_data(&window, file_paths, urls, destination).await
+}
+
+async fn cmd_commit_import<R: Runtime>(
+    window: WebviewWindow<R>,
+    plan: ImportPlan,
 ) -> YaakResult<BatchUpsertResult> {
-    import_data(&window, file_path).await
-}
-
-#[tauri::command]
-async fn cmd_http_request_actions<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetHttpRequestActionsResponse>> {
-    Ok(plugin_manager.get_http_request_actions(&window.plugin_context()).await?)
-}
-
-#[tauri::command]
-async fn cmd_websocket_request_actions<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetWebsocketRequestActionsResponse>> {
-    Ok(plugin_manager.get_websocket_request_actions(&window.plugin_context()).await?)
-}
-
-#[tauri::command]
-async fn cmd_call_websocket_request_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    req: CallWebsocketRequestActionRequest,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<()> {
-    let websocket_request = window.db().get_websocket_request(&req.args.websocket_request.id)?;
-    Ok(plugin_manager
-        .call_websocket_request_action(
-            &window.plugin_context(),
-            CallWebsocketRequestActionRequest {
-                args: CallWebsocketRequestActionArgs { websocket_request },
-                ..req
-            },
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_workspace_actions<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetWorkspaceActionsResponse>> {
-    Ok(plugin_manager.get_workspace_actions(&window.plugin_context()).await?)
-}
-
-#[tauri::command]
-async fn cmd_call_workspace_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    req: CallWorkspaceActionRequest,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<()> {
-    let workspace = window.db().get_workspace(&req.args.workspace.id)?;
-    Ok(plugin_manager
-        .call_workspace_action(
-            &window.plugin_context(),
-            CallWorkspaceActionRequest { args: CallWorkspaceActionArgs { workspace }, ..req },
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_folder_actions<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetFolderActionsResponse>> {
-    Ok(plugin_manager.get_folder_actions(&window.plugin_context()).await?)
-}
-
-#[tauri::command]
-async fn cmd_call_folder_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    req: CallFolderActionRequest,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<()> {
-    let folder = window.db().get_folder(&req.args.folder.id)?;
-    Ok(plugin_manager
-        .call_folder_action(
-            &window.plugin_context(),
-            CallFolderActionRequest { args: CallFolderActionArgs { folder }, ..req },
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_grpc_request_actions<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetGrpcRequestActionsResponse>> {
-    Ok(plugin_manager.get_grpc_request_actions(&window.plugin_context()).await?)
-}
-
-#[tauri::command]
-async fn cmd_template_function_summaries<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetTemplateFunctionSummaryResponse>> {
-    let results = plugin_manager.get_template_function_summaries(&window.plugin_context()).await?;
-    Ok(results)
-}
-
-#[tauri::command]
-async fn cmd_template_function_config<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-    function_name: &str,
-    values: HashMap<String, JsonPrimitive>,
-    model: AnyModel,
-    _environment_id: Option<&str>,
-) -> YaakResult<GetTemplateFunctionConfigResponse> {
-    Ok(plugin_manager
-        .get_template_function_config(&window.plugin_context(), function_name, values, model.id())
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_get_http_authentication_summaries<R: Runtime>(
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<GetHttpAuthenticationSummaryResponse>> {
-    let results =
-        plugin_manager.get_http_authentication_summaries(&window.plugin_context()).await?;
-    Ok(results.into_iter().map(|(_, a)| a).collect())
-}
-
-#[tauri::command]
-async fn cmd_get_http_authentication_config<R: Runtime>(
-    window: WebviewWindow<R>,
-    app_handle: AppHandle<R>,
-    plugin_manager: State<'_, PluginManager>,
-    encryption_manager: State<'_, EncryptionManager>,
-    auth_name: &str,
-    values: HashMap<String, JsonPrimitive>,
-    model: AnyModel,
-    environment_id: Option<&str>,
-) -> YaakResult<GetHttpAuthenticationConfigResponse> {
-    // Extract workspace_id and folder_id from the model to resolve the environment chain
-    let (workspace_id, folder_id) = match &model {
-        AnyModel::HttpRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::GrpcRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::WebsocketRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::Folder(f) => (f.workspace_id.clone(), f.folder_id.clone()),
-        AnyModel::Workspace(w) => (w.id.clone(), None),
-        _ => return Err(GenericError("Unsupported model type for authentication config".into())),
-    };
-
-    // Resolve environment chain and render the values for token lookup
-    let environment_chain = app_handle.db().resolve_environments(
-        &workspace_id,
-        folder_id.as_deref(),
-        environment_id,
-    )?;
-    let plugin_manager_arc = Arc::new((*plugin_manager).clone());
-    let encryption_manager_arc = Arc::new((*encryption_manager).clone());
-    let cb = PluginTemplateCallback::new(
-        plugin_manager_arc,
-        encryption_manager_arc,
-        &window.plugin_context(),
-        RenderPurpose::Preview,
-    );
-
-    // Convert HashMap<String, JsonPrimitive> to serde_json::Value for rendering
-    let values_json: serde_json::Value = serde_json::to_value(&values)?;
-    let rendered_json =
-        render_json_value(values_json, environment_chain, &cb, &RenderOptions::return_empty())
-            .await?;
-
-    // Convert back to HashMap<String, JsonPrimitive>
-    let rendered_values: HashMap<String, JsonPrimitive> = serde_json::from_value(rendered_json)?;
-
-    Ok(plugin_manager
-        .get_http_authentication_config(
-            &window.plugin_context(),
-            auth_name,
-            rendered_values,
-            model.id(),
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_call_http_request_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    req: CallHttpRequestActionRequest,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<()> {
-    Ok(plugin_manager
-        .call_http_request_action(
-            &window.plugin_context(),
-            CallHttpRequestActionRequest {
-                args: CallHttpRequestActionArgs {
-                    http_request: resolve_http_request(&window, &req.args.http_request)?.0,
-                    ..req.args
-                },
-                ..req
-            },
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_call_grpc_request_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    req: CallGrpcRequestActionRequest,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<()> {
-    Ok(plugin_manager
-        .call_grpc_request_action(
-            &window.plugin_context(),
-            CallGrpcRequestActionRequest {
-                args: CallGrpcRequestActionArgs {
-                    grpc_request: resolve_grpc_request(&window, &req.args.grpc_request)?.0,
-                    ..req.args
-                },
-                ..req
-            },
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_call_http_authentication_action<R: Runtime>(
-    window: WebviewWindow<R>,
-    app_handle: AppHandle<R>,
-    plugin_manager: State<'_, PluginManager>,
-    encryption_manager: State<'_, EncryptionManager>,
-    auth_name: &str,
-    action_index: i32,
-    values: HashMap<String, JsonPrimitive>,
-    model: AnyModel,
-    environment_id: Option<&str>,
-) -> YaakResult<()> {
-    // Extract workspace_id and folder_id from the model to resolve the environment chain
-    let (workspace_id, folder_id) = match &model {
-        AnyModel::HttpRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::GrpcRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::WebsocketRequest(r) => (r.workspace_id.clone(), r.folder_id.clone()),
-        AnyModel::Folder(f) => (f.workspace_id.clone(), f.folder_id.clone()),
-        AnyModel::Workspace(w) => (w.id.clone(), None),
-        _ => return Err(GenericError("Unsupported model type for authentication action".into())),
-    };
-
-    // Resolve environment chain and render the values
-    let environment_chain = app_handle.db().resolve_environments(
-        &workspace_id,
-        folder_id.as_deref(),
-        environment_id,
-    )?;
-    let plugin_manager_arc = Arc::new((*plugin_manager).clone());
-    let encryption_manager_arc = Arc::new((*encryption_manager).clone());
-    let cb = PluginTemplateCallback::new(
-        plugin_manager_arc,
-        encryption_manager_arc,
-        &window.plugin_context(),
-        RenderPurpose::Send,
-    );
-
-    // Convert HashMap<String, JsonPrimitive> to serde_json::Value for rendering
-    let values_json: serde_json::Value = serde_json::to_value(&values)?;
-    let rendered_json =
-        render_json_value(values_json, environment_chain, &cb, &RenderOptions::throw()).await?;
-
-    // Convert back to HashMap<String, JsonPrimitive>
-    let rendered_values: HashMap<String, JsonPrimitive> = serde_json::from_value(rendered_json)?;
-
-    Ok(plugin_manager
-        .call_http_authentication_action(
-            &window.plugin_context(),
-            auth_name,
-            action_index,
-            rendered_values,
-            &model.id(),
-        )
-        .await?)
-}
-
-#[tauri::command]
-async fn cmd_curl_to_request<R: Runtime>(
-    window: WebviewWindow<R>,
-    command: &str,
-    plugin_manager: State<'_, PluginManager>,
-    workspace_id: &str,
-) -> YaakResult<HttpRequest> {
-    let import_result = plugin_manager.import_data(&window.plugin_context(), command).await?;
-
-    Ok(import_result
-        .resources
-        .http_requests
-        .get(0)
-        .ok_or(GenericError("No curl command found".to_string()))
-        .map(|r| {
-            let mut request = r.clone();
-            request.workspace_id = workspace_id.into();
-            request.id = "".to_string();
-            request
-        })?)
-}
-
-#[tauri::command]
-async fn cmd_export_data<R: Runtime>(
-    app_handle: AppHandle<R>,
-    export_path: &str,
-    workspace_ids: Vec<&str>,
-    include_private_environments: bool,
-) -> YaakResult<()> {
-    let version = app_handle.package_info().version.to_string();
-    Ok(export::export_data(ExportDataParams {
-        query_manager: &app_handle.db_manager(),
-        yaak_version: &version,
-        export_path: Path::new(export_path),
-        workspace_ids,
-        include_private_environments,
-    })?)
-}
-
-#[tauri::command]
-async fn cmd_export_folder<R: Runtime>(
-    app_handle: AppHandle<R>,
-    folder_id: &str,
-    format: &str,
-    export_path: &str,
-) -> YaakResult<ExportFolderResult> {
-    Ok(export::export_folder(ExportFolderParams {
-        query_manager: &app_handle.db_manager(),
-        folder_id,
-        format: CollectionFormat::parse(format)?,
-        export_path: Path::new(export_path),
-    })?)
+    commit_import(&window, plan)
 }
 
 /// Decodes base64 and writes the bytes to a file the user picked.
@@ -1459,7 +1064,6 @@ async fn cmd_export_folder<R: Runtime>(
 /// array of numbers, several times the size of the thing being saved. And the callers that need
 /// this — values the editor collapsed — are holding base64 already, so passing it through
 /// untouched means the save never decodes megabytes on the main thread.
-#[tauri::command]
 async fn cmd_save_base64_to_binary<R: Runtime>(
     _app_handle: AppHandle<R>,
     filepath: &str,
@@ -1473,22 +1077,6 @@ async fn cmd_save_base64_to_binary<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
-async fn cmd_save_response<R: Runtime>(
-    app_handle: AppHandle<R>,
-    response_id: &str,
-    filepath: &str,
-) -> YaakResult<()> {
-    let response = app_handle.db().get_http_response(response_id)?;
-
-    let body_path =
-        response.body_path.ok_or(GenericError("Response does not have a body".to_string()))?;
-    fs::copy(body_path, filepath).map_err(|e| GenericError(e.to_string()))?;
-
-    Ok(())
-}
-
-#[tauri::command]
 async fn cmd_send_http_request<R: Runtime>(
     app_handle: AppHandle<R>,
     window: WebviewWindow<R>,
@@ -1499,15 +1087,17 @@ async fn cmd_send_http_request<R: Runtime>(
     let request = app_handle.db().get_http_request(&request_id)?;
 
     let blobs = app_handle.blob_manager();
-    let response = app_handle.db().upsert_http_response(
-        &HttpResponse {
-            request_id: request.id.clone(),
-            workspace_id: request.workspace_id.clone(),
-            ..Default::default()
-        },
-        &UpdateSource::from_window_label(window.label()),
-        &blobs,
-    )?;
+    let response = app_handle.with_tx(|tx| {
+        tx.upsert_http_response(
+            &HttpResponse {
+                request_id: request.id.clone(),
+                workspace_id: request.workspace_id.clone(),
+                ..Default::default()
+            },
+            &UpdateSource::from_window_label(window.label()),
+            &blobs,
+        )
+    })?;
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     app_handle.listen_any(format!("cancel_http_response_{}", response.id), move |_event| {
@@ -1542,143 +1132,26 @@ async fn cmd_send_http_request<R: Runtime>(
     )
     .await
     {
-        Ok(r) => r,
+        Ok(sent) => sent.response,
         Err(e) => {
             let resp = app_handle.db().get_http_response(&response.id)?;
-            app_handle.db().upsert_http_response(
-                &HttpResponse {
-                    state: HttpResponseState::Closed,
-                    error: Some(e.to_string()),
-                    ..resp
-                },
-                &UpdateSource::from_window_label(window.label()),
-                &blobs,
-            )?
+            app_handle.with_tx(|tx| {
+                tx.upsert_http_response(
+                    &HttpResponse {
+                        state: HttpResponseState::Closed,
+                        error: Some(e.to_string()),
+                        ..resp
+                    },
+                    &UpdateSource::from_window_label(window.label()),
+                    &blobs,
+                )
+            })?
         }
     };
 
     Ok(r)
 }
 
-#[tauri::command]
-async fn cmd_reload_plugins<R: Runtime>(
-    app_handle: AppHandle<R>,
-    window: WebviewWindow<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<Vec<(String, String)>> {
-    let plugins = app_handle.db().list_plugins()?;
-    let plugin_context =
-        PluginContext::new(Some(window.label().to_string()), window.workspace_id());
-    let errors = plugin_manager.initialize_all_plugins(plugins, &plugin_context).await;
-    Ok(errors)
-}
-
-#[tauri::command]
-async fn cmd_plugin_info<R: Runtime>(
-    id: &str,
-    app_handle: AppHandle<R>,
-    plugin_manager: State<'_, PluginManager>,
-) -> YaakResult<PluginMetadata> {
-    let plugin = app_handle.db().get_plugin(id)?;
-    if let Some(plugin_handle) = plugin_manager
-        .get_plugin_by_dir(plugin.directory.as_str())
-        .await
-    {
-        return Ok(plugin_handle.info());
-    }
-
-    if let Ok(metadata) = get_plugin_meta(&PathBuf::from(&plugin.directory)) {
-        return Ok(metadata);
-    }
-
-    Ok(fallback_plugin_metadata(&plugin.directory))
-}
-
-fn fallback_plugin_metadata(directory: &str) -> PluginMetadata {
-    let display_name = PathBuf::from(directory)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(directory)
-        .to_string();
-
-    PluginMetadata {
-        version: "Unavailable".to_string(),
-        name: directory.to_string(),
-        display_name,
-        description: Some(format!("Plugin metadata could not be loaded from {directory}")),
-        homepage_url: None,
-        repository_url: None,
-    }
-}
-
-#[tauri::command]
-async fn cmd_delete_all_grpc_connections<R: Runtime>(
-    request_id: &str,
-    app_handle: AppHandle<R>,
-    window: WebviewWindow<R>,
-) -> YaakResult<()> {
-    Ok(app_handle.db().delete_all_grpc_connections_for_request(
-        request_id,
-        &UpdateSource::from_window_label(window.label()),
-    )?)
-}
-
-#[tauri::command]
-async fn cmd_delete_send_history<R: Runtime>(
-    workspace_id: &str,
-    app_handle: AppHandle<R>,
-    window: WebviewWindow<R>,
-) -> YaakResult<()> {
-    Ok(app_handle.with_tx(|tx| {
-        let source = &UpdateSource::from_window_label(window.label());
-        tx.delete_all_http_responses_for_workspace(workspace_id, source)?;
-        tx.delete_all_grpc_connections_for_workspace(workspace_id, source)?;
-        tx.delete_all_websocket_connections_for_workspace(workspace_id, source)?;
-        Ok(())
-    })?)
-}
-
-#[tauri::command]
-async fn cmd_prune_http_responses<R: Runtime>(
-    workspace_id: &str,
-    keep_ids: Vec<String>,
-    app_handle: AppHandle<R>,
-    window: WebviewWindow<R>,
-) -> YaakResult<usize> {
-    let blobs = app_handle.blob_manager();
-    Ok(app_handle.db().prune_http_responses_for_workspace(
-        workspace_id,
-        &keep_ids,
-        &UpdateSource::from_window_label(window.label()),
-        &blobs,
-    )?)
-}
-
-#[tauri::command]
-async fn cmd_delete_all_http_responses<R: Runtime>(
-    request_id: &str,
-    app_handle: AppHandle<R>,
-    window: WebviewWindow<R>,
-) -> YaakResult<()> {
-    app_handle.db().delete_all_http_responses_for_request(
-        request_id,
-        &UpdateSource::from_window_label(window.label()),
-    )?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn cmd_get_workspace_meta<R: Runtime>(
-    app_handle: AppHandle<R>,
-    workspace_id: &str,
-) -> YaakResult<WorkspaceMeta> {
-    let db = app_handle.db();
-    let workspace = db.get_workspace(workspace_id)?;
-    Ok(db.get_or_create_workspace_meta(&workspace.id)?)
-}
-
-#[tauri::command]
 async fn cmd_new_child_window<R: Runtime>(
     parent_window: WebviewWindow<R>,
     url: &str,
@@ -1701,7 +1174,6 @@ async fn cmd_new_child_window<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
 async fn cmd_new_main_window<R: Runtime>(app_handle: AppHandle<R>, url: &str) -> YaakResult<()> {
     let use_native_titlebar = app_handle.db().get_settings().use_native_titlebar;
     let initialization_script = initial_appearance_script(&app_handle);
@@ -1715,7 +1187,6 @@ async fn cmd_new_main_window<R: Runtime>(app_handle: AppHandle<R>, url: &str) ->
     Ok(())
 }
 
-#[tauri::command]
 async fn cmd_check_for_updates<R: Runtime>(
     window: WebviewWindow<R>,
     yaak_updater: State<'_, Mutex<YaakUpdater>>,
@@ -1806,6 +1277,18 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            let lifecycle_host = yaak_lifecycle::Host::owner()
+                .with_responses_dir(app.path().app_data_dir()?.join("responses"));
+            if let Err(e) = app
+                .with_tx(|tx| yaak_lifecycle::on_launch(&lifecycle_host, tx, &app.blob_manager()))
+            {
+                error!("on_launch hook failed: {e:?}");
+            }
+
+            // The RPC command registry — every frontend command dispatches
+            // through this via the single `rpc` Tauri command
+            app.manage(rpc_ext::build_rpc_router::<TauriRuntime>());
+
             // Initialize HTTP connection manager
             app.manage(yaak_http::manager::HttpConnectionManager::new());
 
@@ -1814,7 +1297,7 @@ pub fn run() {
                 app.state::<yaak_models::query_manager::QueryManager>().inner().clone();
             let app_id = app.config().identifier.to_string();
             app.manage(yaak_crypto::manager::EncryptionManager::new(query_manager, app_id));
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             if let Some(state) = yaak_system_appearance::watch(app.app_handle().clone()) {
                 app.manage(state);
             }
@@ -1880,130 +1363,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            cmd_call_http_authentication_action,
-            cmd_call_http_request_action,
-            cmd_call_websocket_request_action,
-            cmd_call_workspace_action,
-            cmd_call_folder_action,
-            cmd_call_grpc_request_action,
-            cmd_check_for_updates,
-            cmd_curl_to_request,
-            cmd_delete_all_grpc_connections,
-            cmd_delete_all_http_responses,
-            cmd_delete_send_history,
-            cmd_prune_http_responses,
-            cmd_dismiss_notification,
-            cmd_export_data,
-            cmd_export_folder,
-            cmd_send_feedback,
-            cmd_http_request_body,
-            cmd_http_response_body,
-            cmd_format_json,
-            cmd_format_graphql,
-            cmd_get_http_authentication_summaries,
-            cmd_get_http_authentication_config,
-            cmd_get_sse_events,
-            cmd_get_http_response_events,
-            cmd_get_workspace_meta,
-            cmd_grpc_go,
-            cmd_grpc_reflect,
-            cmd_grpc_request_actions,
-            cmd_http_request_actions,
-            cmd_websocket_request_actions,
-            cmd_workspace_actions,
-            cmd_folder_actions,
-            cmd_import_data,
-            cmd_metadata,
-            cmd_new_child_window,
-            cmd_new_main_window,
-            cmd_plugin_info,
-            cmd_reload_plugins,
-            cmd_render_template,
-            cmd_restart,
-            cmd_save_base64_to_binary,
-            cmd_save_response,
-            cmd_send_ephemeral_request,
-            cmd_send_http_request,
-            cmd_template_function_config,
-            cmd_template_function_summaries,
-            cmd_template_tokens_to_string,
-            //
-            //
-            // Migrated commands
-            crate::commands::cmd_decrypt_template,
-            crate::commands::cmd_default_headers,
-            crate::commands::cmd_disable_encryption,
-            crate::commands::cmd_enable_encryption,
-            crate::commands::cmd_get_themes,
-            crate::commands::cmd_reveal_workspace_key,
-            crate::commands::cmd_secure_template,
-            crate::commands::cmd_set_workspace_key,
-            //
-            // Models commands
-            models_ext::models_delete,
-            models_ext::models_duplicate,
-            models_ext::models_get_graphql_introspection,
-            models_ext::models_get_settings,
-            models_ext::models_grpc_events,
-            models_ext::models_upsert,
-            models_ext::models_upsert_graphql_introspection,
-            models_ext::models_websocket_events,
-            models_ext::models_workspace_models,
-            //
-            // Sync commands
-            sync_ext::cmd_sync_calculate,
-            sync_ext::cmd_sync_calculate_fs,
-            sync_ext::cmd_sync_apply,
-            sync_ext::cmd_sync_watch,
-            //
-            // Git commands
-            git_ext::cmd_git_checkout,
-            git_ext::cmd_git_branch,
-            git_ext::cmd_git_delete_branch,
-            git_ext::cmd_git_delete_remote_branch,
-            git_ext::cmd_git_merge_branch,
-            git_ext::cmd_git_rename_branch,
-            git_ext::cmd_git_branch_info,
-            git_ext::cmd_git_status,
-            git_ext::cmd_git_worktree_status,
-            git_ext::cmd_git_watch_worktree_status,
-            git_ext::cmd_git_log,
-            git_ext::cmd_git_log_for_file,
-            git_ext::cmd_git_file_diff_for_commit,
-            git_ext::cmd_git_initialize,
-            git_ext::cmd_git_clone,
-            git_ext::cmd_git_commit,
-            git_ext::cmd_git_fetch_all,
-            git_ext::cmd_git_push,
-            git_ext::cmd_git_pull,
-            git_ext::cmd_git_pull_force_reset,
-            git_ext::cmd_git_pull_merge,
-            git_ext::cmd_git_add,
-            git_ext::cmd_git_unstage,
-            git_ext::cmd_git_reset_changes,
-            git_ext::cmd_git_restore_files,
-            git_ext::cmd_git_restore_file_from_commit,
-            git_ext::cmd_git_add_credential,
-            git_ext::cmd_git_remotes,
-            git_ext::cmd_git_add_remote,
-            git_ext::cmd_git_rm_remote,
-            //
-            // Plugin commands
-            plugins_ext::cmd_plugin_init_errors,
-            plugins_ext::cmd_plugins_install_from_directory,
-            plugins_ext::cmd_plugins_search,
-            plugins_ext::cmd_plugins_install,
-            plugins_ext::cmd_plugins_uninstall,
-            plugins_ext::cmd_plugins_updates,
-            plugins_ext::cmd_plugins_update_all,
-            //
-            // WebSocket commands
-            ws_ext::cmd_ws_delete_connections,
-            ws_ext::cmd_ws_send,
-            ws_ext::cmd_ws_close,
-            ws_ext::cmd_ws_connect,
-        ])
+        .invoke_handler(tauri::generate_handler![rpc_ext::rpc])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
@@ -2024,18 +1384,19 @@ pub fn run() {
                         let info = history::get_or_upsert_launch_info(&h);
                         debug!("Launched Yaak {:?}", info);
                     });
-
-                    // Cancel pending requests
-                    let h = app_handle.clone();
-                    tauri::async_runtime::block_on(async move {
-                        let db = h.db();
-                        let _ = db.cancel_pending_http_responses();
-                        let _ = db.cancel_pending_grpc_connections();
-                        let _ = db.cancel_pending_websocket_connections();
-                    });
+                }
+                RunEvent::WindowEvent { event: WindowEvent::ThemeChanged(_), .. } => {
+                    // On macOS this is how OS appearance changes arrive: tao observes
+                    // AppleInterfaceThemeChangedNotification and emits it for every window
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    if let Some(state) =
+                        app_handle.try_state::<yaak_system_appearance::SystemAppearanceState>()
+                    {
+                        yaak_system_appearance::emit_change(app_handle, &state);
+                    }
                 }
                 RunEvent::WindowEvent { event: WindowEvent::Focused(true), label, .. } => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
                     if let Some(state) =
                         app_handle.try_state::<yaak_system_appearance::SystemAppearanceState>()
                     {
@@ -2076,6 +1437,7 @@ pub fn run() {
                         }
                     });
                 }
+                RunEvent::Exit => restart::relaunch_if_requested(),
                 _ => {}
             };
         });
@@ -2097,7 +1459,10 @@ fn safe_uri(endpoint: &str) -> String {
 fn monitor_plugin_events<R: Runtime>(app_handle: &AppHandle<R>) {
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let plugin_manager: State<'_, PluginManager> = app_handle.state();
+        let plugin_manager = match plugins_ext::plugin_manager(&app_handle).await {
+            Ok(pm) => pm,
+            Err(_) => return, // The runtime failed to boot; there are no events
+        };
         let (rx_id, mut rx) = plugin_manager.subscribe("app").await;
 
         while let Some(event) = rx.recv().await {
@@ -2118,6 +1483,7 @@ fn monitor_plugin_events<R: Runtime>(app_handle: &AppHandle<R>) {
 
                 let ev = match ev {
                     Ok(Some(ev)) => ev,
+                    // Nothing to say, or the reply comes later from somewhere else.
                     Ok(None) => return,
                     Err(e) => {
                         warn!("Failed to handle plugin event: {e:?}");
@@ -2130,13 +1496,20 @@ fn monitor_plugin_events<R: Runtime>(app_handle: &AppHandle<R>) {
                                 timeout: Some(30000),
                             }),
                         );
-                        return;
+                        // Tell the plugin as well as the user. It is awaiting a
+                        // reply, and a toast it cannot see would leave it
+                        // waiting for one that never comes.
+                        InternalEventPayload::ErrorResponse(ErrorResponse { error: e.to_string() })
                     }
                 };
 
-                let plugin_manager: State<'_, PluginManager> = app_handle.state();
-                if let Err(e) = plugin_manager.reply(&event, &ev).await {
-                    warn!("Failed to reply to plugin manager: {:?}", e)
+                match plugins_ext::plugin_manager(&app_handle).await {
+                    Ok(pm) => {
+                        if let Err(e) = pm.reply(&event, &ev).await {
+                            warn!("Failed to reply to plugin manager: {:?}", e)
+                        }
+                    }
+                    Err(e) => warn!("Failed to get plugin manager for reply: {e:?}"),
                 }
             });
         }

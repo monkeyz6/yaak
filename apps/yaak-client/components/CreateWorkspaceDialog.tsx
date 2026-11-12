@@ -3,13 +3,13 @@ import { useTranslation } from "@yaakapp-internal/i18n";
 import type { WorkspaceMeta } from "@yaakapp-internal/models";
 import { createGlobalModel, updateModel } from "@yaakapp-internal/models";
 import { VStack } from "@yaakapp-internal/ui";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { router } from "../lib/router";
 import { setupOrConfigureEncryption } from "../lib/setupOrConfigureEncryption";
-import { invokeCmd } from "../lib/tauri";
+import { rpc } from "../lib/rpc";
 import { showErrorToast } from "../lib/toast";
-import { Button } from "./core/Button";
 import { Checkbox } from "./core/Checkbox";
+import { DialogFooter } from "./core/Dialog";
 import { Label } from "./core/Label";
 import { PlainInput } from "./core/PlainInput";
 import { EncryptionHelp } from "./EncryptionHelp";
@@ -28,12 +28,13 @@ export function CreateWorkspaceDialog({ hide }: Props) {
     initGit?: boolean;
   }>({ filePath: null, initGit: false });
   const [setupEncryption, setSetupEncryption] = useState<boolean>(false);
+  const formId = useId();
   return (
     <VStack
       as="form"
+      id={formId}
       space={3}
       alignItems="start"
-      className="pb-3"
       onSubmit={async (e) => {
         e.preventDefault();
         const workspaceId = await createGlobalModel({ model: "workspace", name });
@@ -41,7 +42,7 @@ export function CreateWorkspaceDialog({ hide }: Props) {
 
         // Do getWorkspaceMeta instead of naively creating one because it might have
         // been created already when the store refreshes the workspace meta after
-        const workspaceMeta = await invokeCmd<WorkspaceMeta>("cmd_get_workspace_meta", {
+        const workspaceMeta = await rpc<WorkspaceMeta>("cmd_get_workspace_meta", {
           workspaceId,
         });
         await updateModel({
@@ -91,9 +92,7 @@ export function CreateWorkspaceDialog({ hide }: Props) {
           title={t("workspace.enableEncryption")}
         />
       </div>
-      <Button type="submit" color="primary" className="w-full mt-3">
-        {t("workspace.create")}
-      </Button>
+      <DialogFooter actions={[{ label: t("workspace.create"), color: "primary", form: formId }]} />
     </VStack>
   );
 }

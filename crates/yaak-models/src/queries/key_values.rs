@@ -1,9 +1,10 @@
-use crate::client_db::ClientDb;
+use crate::client_db::{ClientDb, WriteDb};
 use crate::error::Result;
 use crate::models::{KeyValue, KeyValueIden, UpsertModelInfo};
 use crate::util::UpdateSource;
 use chrono::NaiveDateTime;
 use log::error;
+use sea_query::ExprTrait;
 use sea_query::{Asterisk, Cond, Expr, Query, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 
@@ -88,7 +89,9 @@ impl<'a> ClientDb<'a> {
             .build_rusqlite(SqliteQueryBuilder);
         self.conn().resolve().query_row(sql.as_str(), &*params.as_params(), KeyValue::from_row).ok()
     }
+}
 
+impl<'a> WriteDb<'a> {
     pub fn set_key_value_dte(
         &self,
         namespace: &str,

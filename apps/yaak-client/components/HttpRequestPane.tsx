@@ -6,11 +6,11 @@ import classNames from "classnames";
 import { atom, useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { importCurl, looksLikeCurl } from "../commands/importCurl";
 import { allRequestUrlsAtom } from "../hooks/useAllRequests";
 import { useAuthTab } from "../hooks/useAuthTab";
 import { useCancelHttpResponse } from "../hooks/useCancelHttpResponse";
 import { useHeadersTab } from "../hooks/useHeadersTab";
-import { useImportCurl } from "../hooks/useImportCurl";
 import { useInheritedHeaders } from "../hooks/useInheritedHeaders";
 import { usePinnedHttpResponse } from "../hooks/usePinnedHttpResponse";
 import { useRequestEditor, useRequestEditorEvent } from "../hooks/useRequestEditor";
@@ -169,6 +169,8 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
       : 0;
   }
 
+  const hasDescription = activeRequest.description.trim().length > 0;
+
   const tabs = useMemo<TabItem[]>(
     () => [
       {
@@ -269,6 +271,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
       {
         value: TAB_DESCRIPTION,
         label: t("request.info"),
+        rightSlot: hasDescription && <CountBadge count={true} />,
       },
     ],
     [
@@ -276,6 +279,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
       authTab,
       contentType,
       handleContentTypeChange,
+      hasDescription,
       headersTab,
       numParams,
       numSettingsOverrides,
@@ -288,7 +292,6 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
   const { activeResponse } = usePinnedHttpResponse(activeRequestId);
   const { mutate: cancelResponse } = useCancelHttpResponse(activeResponse?.id ?? null);
   const updateKey = useRequestUpdateKey(activeRequestId);
-  const { mutate: importCurl } = useImportCurl();
 
   const handleBodyChange = useCallback(
     (body: HttpRequest["body"]) => patchModelDebounced(activeRequest, { body }),
@@ -309,8 +312,8 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
 
   const handlePaste = useCallback(
     async (e: ClipboardEvent, text: string) => {
-      if (text.startsWith("curl ")) {
-        importCurl({ overwriteRequestId: activeRequestId, command: text });
+      if (looksLikeCurl(text)) {
+        importCurl.mutate({ overwriteRequestId: activeRequestId, command: text });
       } else {
         const patch = prepareImportQuerystring(text);
         if (patch != null) {
@@ -332,7 +335,7 @@ export function HttpRequestPane({ style, fullHeight, className, activeRequest }:
         }
       }
     },
-    [activeRequest, activeRequestId, forceParamsRefresh, forceUrlRefresh, importCurl],
+    [activeRequest, activeRequestId, forceParamsRefresh, forceUrlRefresh],
   );
   const handleSend = useCallback(
     () => sendRequest(activeRequest.id ?? null),

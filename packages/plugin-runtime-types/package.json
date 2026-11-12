@@ -1,6 +1,6 @@
 {
   "name": "@yaakapp/api",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "keywords": [
     "api-client",
     "bruno-alternative",
@@ -30,9 +30,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@types/node": "^24.0.13"
+    "@types/node": "^22.20.4"
   },
   "devDependencies": {
-    "cpy-cli": "^5.0.0"
+    "cpy-cli": "^7.0.0"
   }
 }

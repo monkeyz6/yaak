@@ -1,6 +1,6 @@
 import "./main.css";
 import { RouterProvider } from "@tanstack/react-router";
-import { type } from "@tauri-apps/plugin-os";
+import { platform } from "@yaakapp-internal/platform";
 import { initializeI18n } from "@yaakapp-internal/i18n";
 import { changeModelStoreWorkspace, initModelStore } from "@yaakapp-internal/models";
 import { setPlatformOnDocument } from "@yaakapp-internal/theme";
@@ -12,7 +12,7 @@ import { initGlobalListeners } from "./lib/initGlobalListeners";
 import { jotaiStore } from "./lib/jotai";
 import { router } from "./lib/router";
 
-const osType = type();
+const osType = platform.osType();
 setPlatformOnDocument(osType);
 await initializeI18n();
 

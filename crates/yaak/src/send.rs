@@ -1,7 +1,6 @@
 use crate::post_actions::{
     MAX_POST_ACTION_BODY_BYTES, PostActionBody, PostActionOutcome, execute_post_response_actions,
 };
-use crate::render::render_http_request;
 use async_trait::async_trait;
 use log::warn;
 use std::path::{Path, PathBuf};
@@ -27,11 +26,12 @@ use yaak_http::types::{
 };
 use yaak_models::blob_manager::{BlobManager, BodyChunk};
 use yaak_models::models::{
-    ClientCertificate, CookieJar, DnsOverride, Environment, HttpRequest, HttpResponse,
-    HttpResponseEvent, HttpResponseHeader, HttpResponseState, ProxySetting, ProxySettingAuth,
-    ResolvedSetting, HttpResponseEventData,
+    ClientCertificate, Cookie, CookieJar, DnsOverride, Environment, HttpRequest, HttpResponse,
+    HttpResponseEvent, HttpResponseEventData, HttpResponseHeader, HttpResponseState, ProxySetting,
+    ProxySettingAuth, ResolvedHttpRequestSettings,
 };
 use yaak_models::query_manager::QueryManager;
+use yaak_models::render::render_http_request;
 use yaak_models::util::{UpdateSource, generate_prefixed_id};
 use yaak_plugins::events::{
     CallHttpAuthenticationRequest, HttpHeader, PluginContext, RenderPurpose,
@@ -44,6 +44,7 @@ use yaak_tls::find_client_certificate;
 const HTTP_EVENT_CHANNEL_CAPACITY: usize = 100;
 const REQUEST_BODY_CHUNK_SIZE: usize = 1024 * 1024;
 const RESPONSE_PROGRESS_UPDATE_INTERVAL_MS: u128 = 100;
+const MAX_AUTH_BODY_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum SendHttpRequestError {
@@ -130,31 +131,6 @@ pub struct CookieBehavior {
     pub store_cookies: bool,
 }
 
-struct DefaultSendRequestExecutor;
-
-#[async_trait]
-impl SendRequestExecutor for DefaultSendRequestExecutor {
-    async fn send(
-        &self,
-        sendable_request: SendableHttpRequest,
-        event_tx: mpsc::Sender<SenderHttpResponseEvent>,
-        cookie_behavior: CookieBehavior,
-    ) -> yaak_http::error::Result<yaak_http::sender::HttpResponse> {
-        let sender = ReqwestSender::new()?;
-        let transaction = match cookie_behavior.store {
-            Some(store) => HttpTransaction::with_cookie_behavior(
-                sender,
-                store,
-                cookie_behavior.send_cookies,
-                cookie_behavior.store_cookies,
-            ),
-            None => HttpTransaction::new(sender),
-        };
-        let (_cancel_tx, cancel_rx) = watch::channel(false);
-        transaction.execute_with_cancellation(sendable_request, cancel_rx, event_tx).await
-    }
-}
-
 struct PluginPrepareSendableRequest {
     plugin_manager: Arc<PluginManager>,
     plugin_context: PluginContext,
@@ -197,8 +173,7 @@ impl PrepareSendableRequest for PluginPrepareSendableRequest {
 struct ConnectionManagerSendRequestExecutor<'a> {
     connection_manager: &'a HttpConnectionManager,
     plugin_context_id: String,
-    query_manager: QueryManager,
-    request: HttpRequest,
+    runtime_config: HttpSendRuntimeConfig,
     cancelled_rx: Option<watch::Receiver<bool>>,
 }
 
@@ -210,18 +185,19 @@ impl SendRequestExecutor for ConnectionManagerSendRequestExecutor<'_> {
         event_tx: mpsc::Sender<SenderHttpResponseEvent>,
         cookie_behavior: CookieBehavior,
     ) -> yaak_http::error::Result<yaak_http::sender::HttpResponse> {
-        let runtime_config = resolve_http_send_runtime_config(&self.query_manager, &self.request)
-            .map_err(|e| yaak_http::error::Error::RequestError(e.to_string()))?;
+        let runtime_config = &self.runtime_config;
         let client_certificate =
             find_client_certificate(&sendable_request.url, &runtime_config.client_certificates);
         let cached_client = self
             .connection_manager
             .get_client(&HttpConnectionOptions {
                 id: self.plugin_context_id.clone(),
-                validate_certificates: runtime_config.validate_certificates,
-                proxy: runtime_config.proxy,
+                validate_certificates: runtime_config.settings.validate_certificates.value,
+                http_version: runtime_config.settings.http_version.value,
+                proxy: runtime_config.proxy.clone(),
                 client_certificate,
-                dns_overrides: runtime_config.dns_overrides,
+                dns_overrides: runtime_config.dns_overrides.clone(),
+                address_filter: None,
             })
             .await?;
 
@@ -262,30 +238,77 @@ pub struct SendHttpRequestByIdParams<'a, T: TemplateCallback> {
     pub emit_response_body_chunks_to: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pub cancelled_rx: Option<watch::Receiver<bool>>,
     pub prepare_sendable_request: Option<&'a dyn PrepareSendableRequest>,
-    pub executor: Option<&'a dyn SendRequestExecutor>,
+    pub executor: &'a dyn SendRequestExecutor,
     /// Used to encrypt values extracted by post-response actions marked as secure
     pub encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
-pub struct SendHttpRequestParams<'a, T: TemplateCallback> {
+/// An [`HttpRequest`] carrying the authentication and headers it inherits from its folder or
+/// workspace, alongside the id of the model that authentication came from.
+///
+/// Sending requires inheritance to be applied first, and this type is the only way to say it has
+/// been. There is no public constructor beyond [`resolve_inherited_request`], which resolves it
+/// against a database, and [`ResolvedHttpRequest::assume_resolved`], which a caller without a
+/// database must name explicitly — so skipping inheritance is a deliberate, greppable act rather
+/// than something a new call site forgets.
+#[derive(Clone)]
+pub struct ResolvedHttpRequest {
+    request: HttpRequest,
+    auth_context_id: String,
+}
+
+impl ResolvedHttpRequest {
+    /// Declare a request already resolved, for callers with no database to resolve against. The
+    /// caller owns the promise that inherited authentication and headers are applied.
+    pub fn assume_resolved(request: HttpRequest, auth_context_id: String) -> Self {
+        Self { request, auth_context_id }
+    }
+
+    pub fn request(&self) -> &HttpRequest {
+        &self.request
+    }
+
+    pub fn auth_context_id(&self) -> &str {
+        &self.auth_context_id
+    }
+
+    fn into_parts(self) -> (HttpRequest, String) {
+        (self.request, self.auth_context_id)
+    }
+}
+
+/// Everything a send needs that would otherwise be read from the database.
+///
+/// Callers backed by a database build this with [`resolve_send_inputs`]. A stateless caller
+/// constructs it directly, which is what lets [`send_http_request`] run with no database at all.
+pub struct HttpSendInputs {
+    pub request: ResolvedHttpRequest,
+    pub environment_chain: Vec<Environment>,
+    pub runtime_config: HttpSendRuntimeConfig,
+    /// Cookies the send starts with. The store is shared, so reading it back after the send
+    /// returns (or fails) yields the cookies the transaction collected.
+    pub cookie_store: Option<CookieStore>,
+}
+
+/// Where a send writes its response. Without it, the send keeps everything in memory: no
+/// response body file, no model writes, and no timeline rows.
+pub struct ResponseStorage<'a> {
     pub query_manager: &'a QueryManager,
     pub blob_manager: &'a BlobManager,
-    pub request: HttpRequest,
-    pub environment_id: Option<&'a str>,
-    pub template_callback: &'a T,
-    pub send_options: Option<SendableHttpRequestOptions>,
     pub update_source: UpdateSource,
-    pub cookie_jar_id: Option<String>,
     pub response_dir: &'a Path,
+}
+
+pub struct SendHttpRequestParams<'a, T: TemplateCallback> {
+    pub inputs: HttpSendInputs,
+    pub template_callback: &'a T,
+    pub storage: Option<ResponseStorage<'a>>,
     pub emit_events_to: Option<mpsc::Sender<SenderHttpResponseEvent>>,
     pub emit_response_body_chunks_to: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pub cancelled_rx: Option<watch::Receiver<bool>>,
-    pub auth_context_id: Option<String>,
     pub existing_response: Option<HttpResponse>,
     pub prepare_sendable_request: Option<&'a dyn PrepareSendableRequest>,
-    pub executor: Option<&'a dyn SendRequestExecutor>,
-    /// Used to encrypt values extracted by post-response actions marked as secure
-    pub encryption_manager: Option<Arc<EncryptionManager>>,
+    pub executor: &'a dyn SendRequestExecutor,
 }
 
 pub struct SendHttpRequestWithPluginsParams<'a> {
@@ -303,7 +326,7 @@ pub struct SendHttpRequestWithPluginsParams<'a> {
     pub encryption_manager: Arc<EncryptionManager>,
     pub plugin_context: &'a PluginContext,
     pub cancelled_rx: Option<watch::Receiver<bool>>,
-    pub connection_manager: Option<&'a HttpConnectionManager>,
+    pub connection_manager: &'a HttpConnectionManager,
 }
 
 pub struct SendHttpRequestByIdWithPluginsParams<'a> {
@@ -320,51 +343,123 @@ pub struct SendHttpRequestByIdWithPluginsParams<'a> {
     pub encryption_manager: Arc<EncryptionManager>,
     pub plugin_context: &'a PluginContext,
     pub cancelled_rx: Option<watch::Receiver<bool>>,
-    pub connection_manager: Option<&'a HttpConnectionManager>,
+    pub connection_manager: &'a HttpConnectionManager,
+}
+
+/// Where a send left the response body, so the caller knows where to get it.
+///
+/// The body goes to exactly one place, and which one depends on what the caller
+/// asked for. Saying so outright beats handing back a `Vec` that is empty for
+/// two entirely different reasons.
+pub enum ResponseBody {
+    /// Written to the response's own file. Read it back by response id.
+    Stored,
+    /// Sent to the chunk sender the caller supplied, as it arrived.
+    Streamed,
+    /// Here it is, because nothing else kept it. Empty means the response
+    /// really had no body.
+    Returned(Vec<u8>),
+}
+
+impl ResponseBody {
+    /// The bytes, when this is the only copy of them.
+    ///
+    /// Stored and streamed bodies belong to whoever holds them; only `Returned`
+    /// has to travel back to the caller.
+    pub fn returned_bytes(&self) -> Option<&[u8]> {
+        match self {
+            ResponseBody::Returned(bytes) => Some(bytes),
+            ResponseBody::Stored | ResponseBody::Streamed => None,
+        }
+    }
 }
 
 pub struct SendHttpRequestResult {
     pub rendered_request: HttpRequest,
     pub response: HttpResponse,
-    pub response_body: Vec<u8>,
+    pub response_body: ResponseBody,
+    /// The cookies held by the jar after the send, for callers that persist
+    /// one. `None` when the caller supplied no jar, which is independent of
+    /// where the body went.
+    pub cookies: Option<Vec<Cookie>>,
+    /// Results of the request's post-response actions. Only database-backed sends run them.
     pub post_action_outcomes: Vec<PostActionOutcome>,
 }
 
+#[derive(Clone)]
 pub struct HttpSendRuntimeConfig {
-    pub send_options: SendableHttpRequestOptions,
-    pub validate_certificates: bool,
+    pub settings: ResolvedHttpRequestSettings,
     pub proxy: HttpConnectionProxySetting,
     pub dns_overrides: Vec<DnsOverride>,
     pub client_certificates: Vec<ClientCertificate>,
 }
 
-pub fn resolve_http_send_runtime_config(
-    query_manager: &QueryManager,
-    request: &HttpRequest,
-) -> Result<HttpSendRuntimeConfig> {
-    let db = query_manager.connect();
-    let workspace =
-        db.get_workspace(&request.workspace_id).map_err(SendHttpRequestError::LoadWorkspace)?;
-    let resolved_settings = db
-        .resolve_settings_for_http_request(request)
-        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
-    let settings = db.get_settings();
-
-    Ok(HttpSendRuntimeConfig {
-        send_options: SendableHttpRequestOptions {
-            follow_redirects: resolved_settings.follow_redirects.value,
-            timeout: if resolved_settings.request_timeout.value > 0 {
-                Some(std::time::Duration::from_millis(
-                    resolved_settings.request_timeout.value.unsigned_abs() as u64,
+impl HttpSendRuntimeConfig {
+    pub fn send_options(&self) -> SendableHttpRequestOptions {
+        SendableHttpRequestOptions {
+            follow_redirects: self.settings.follow_redirects.value,
+            timeout: if self.settings.request_timeout.value > 0 {
+                Some(Duration::from_millis(
+                    self.settings.request_timeout.value.unsigned_abs() as u64
                 ))
             } else {
                 None
             },
+        }
+    }
+}
+
+/// Resolve every database-backed input a send needs, in one pass.
+pub fn resolve_send_inputs(
+    query_manager: &QueryManager,
+    request: &HttpRequest,
+    environment_id: Option<&str>,
+    cookies: Option<Vec<Cookie>>,
+) -> Result<HttpSendInputs> {
+    let db = query_manager.connect();
+
+    let environment_chain = db
+        .resolve_environments(&request.workspace_id, request.folder_id.as_deref(), environment_id)
+        .map_err(SendHttpRequestError::ResolveEnvironments)?;
+
+    let resolved_request = resolve_inherited_request(query_manager, request)?;
+
+    let workspace =
+        db.get_workspace(&request.workspace_id).map_err(SendHttpRequestError::LoadWorkspace)?;
+    let settings = db.get_settings();
+    let resolved_settings = db
+        .resolve_settings_for_http_request(request)
+        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
+
+    Ok(HttpSendInputs {
+        request: resolved_request,
+        environment_chain,
+        runtime_config: HttpSendRuntimeConfig {
+            settings: resolved_settings,
+            proxy: proxy_setting_from_settings(settings.proxy),
+            dns_overrides: workspace.setting_dns_overrides,
+            client_certificates: settings.client_certificates,
         },
-        validate_certificates: resolved_settings.validate_certificates.value,
-        proxy: proxy_setting_from_settings(settings.proxy),
-        dns_overrides: workspace.setting_dns_overrides,
-        client_certificates: settings.client_certificates,
+        cookie_store: cookies.map(CookieStore::from_cookies),
+    })
+}
+
+/// Apply the authentication and headers a request inherits from its folder or workspace.
+pub fn resolve_inherited_request(
+    query_manager: &QueryManager,
+    request: &HttpRequest,
+) -> Result<ResolvedHttpRequest> {
+    let db = query_manager.connect();
+    let (authentication_type, authentication, auth_context_id) = db
+        .resolve_auth_for_http_request(request)
+        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
+    let headers = db
+        .resolve_headers_for_http_request(request)
+        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
+
+    Ok(ResolvedHttpRequest {
+        request: HttpRequest { authentication_type, authentication, headers, ..request.clone() },
+        auth_context_id,
     })
 }
 
@@ -400,6 +495,14 @@ pub async fn send_http_request_by_id_with_plugins(
 pub async fn send_http_request_with_plugins(
     params: SendHttpRequestWithPluginsParams<'_>,
 ) -> Result<SendHttpRequestResult> {
+    let mut cookie_jar = load_cookie_jar(params.query_manager, params.cookie_jar_id.as_deref())?;
+    let inputs = resolve_send_inputs(
+        params.query_manager,
+        &params.request,
+        params.environment_id,
+        cookie_jar.as_ref().map(|jar| jar.cookies.clone()),
+    )?;
+
     let template_callback = PluginTemplateCallback::new(
         params.plugin_manager.clone(),
         params.encryption_manager.clone(),
@@ -411,35 +514,47 @@ pub async fn send_http_request_with_plugins(
         plugin_context: params.plugin_context.clone(),
         cancelled_rx: params.cancelled_rx.clone(),
     };
-    let executor =
-        params.connection_manager.map(|connection_manager| ConnectionManagerSendRequestExecutor {
-            connection_manager,
-            plugin_context_id: params.plugin_context.id.clone(),
-            query_manager: params.query_manager.clone(),
-            request: params.request.clone(),
-            cancelled_rx: params.cancelled_rx.clone(),
-        });
+    let executor = ConnectionManagerSendRequestExecutor {
+        connection_manager: params.connection_manager,
+        plugin_context_id: params.plugin_context.id.clone(),
+        runtime_config: inputs.runtime_config.clone(),
+        cancelled_rx: params.cancelled_rx.clone(),
+    };
+    let cookie_store = inputs.cookie_store.clone();
+    let cancelled_rx = params.cancelled_rx.clone();
 
-    send_http_request(SendHttpRequestParams {
-        query_manager: params.query_manager,
-        blob_manager: params.blob_manager,
-        request: params.request,
-        environment_id: params.environment_id,
+    let result = send_http_request(SendHttpRequestParams {
+        inputs,
         template_callback: &template_callback,
-        send_options: None,
-        update_source: params.update_source,
-        cookie_jar_id: params.cookie_jar_id,
-        response_dir: params.response_dir,
+        storage: Some(ResponseStorage {
+            query_manager: params.query_manager,
+            blob_manager: params.blob_manager,
+            update_source: params.update_source.clone(),
+            response_dir: params.response_dir,
+        }),
         emit_events_to: params.emit_events_to,
         emit_response_body_chunks_to: params.emit_response_body_chunks_to,
         cancelled_rx: params.cancelled_rx,
-        auth_context_id: None,
         existing_response: params.existing_response,
         prepare_sendable_request: Some(&auth_hook),
-        executor: executor.as_ref().map(|e| e as &dyn SendRequestExecutor),
-        encryption_manager: Some(params.encryption_manager),
+        executor: &executor,
     })
-    .await
+    .await;
+
+    persist_cookies_after_send(params.query_manager, cookie_jar.as_mut(), cookie_store.as_ref())?;
+
+    let mut result = result?;
+    result.post_action_outcomes = run_post_response_actions(
+        params.query_manager,
+        &params.request,
+        params.environment_id,
+        &result.response,
+        cancelled_rx.as_ref(),
+        Some(params.encryption_manager.as_ref()),
+        &params.update_source,
+    )
+    .await;
+    Ok(result)
 }
 
 pub async fn send_http_request_by_id<T: TemplateCallback>(
@@ -450,51 +565,133 @@ pub async fn send_http_request_by_id<T: TemplateCallback>(
         .connect()
         .get_http_request(params.request_id)
         .map_err(SendHttpRequestError::LoadRequest)?;
-    let (request, auth_context_id) = resolve_inherited_request(params.query_manager, &request)?;
+    let mut cookie_jar = load_cookie_jar(params.query_manager, params.cookie_jar_id.as_deref())?;
+    let inputs = resolve_send_inputs(
+        params.query_manager,
+        &request,
+        params.environment_id,
+        cookie_jar.as_ref().map(|jar| jar.cookies.clone()),
+    )?;
+    let cookie_store = inputs.cookie_store.clone();
+    let cancelled_rx = params.cancelled_rx.clone();
 
-    send_http_request(SendHttpRequestParams {
-        query_manager: params.query_manager,
-        blob_manager: params.blob_manager,
-        request,
-        environment_id: params.environment_id,
+    let result = send_http_request(SendHttpRequestParams {
+        inputs,
         template_callback: params.template_callback,
-        send_options: None,
-        update_source: params.update_source,
-        cookie_jar_id: params.cookie_jar_id,
-        response_dir: params.response_dir,
+        storage: Some(ResponseStorage {
+            query_manager: params.query_manager,
+            blob_manager: params.blob_manager,
+            update_source: params.update_source.clone(),
+            response_dir: params.response_dir,
+        }),
         emit_events_to: params.emit_events_to,
         emit_response_body_chunks_to: params.emit_response_body_chunks_to,
         cancelled_rx: params.cancelled_rx,
         existing_response: None,
         prepare_sendable_request: params.prepare_sendable_request,
         executor: params.executor,
-        auth_context_id: Some(auth_context_id),
-        encryption_manager: params.encryption_manager,
     })
-    .await
+    .await;
+
+    persist_cookies_after_send(params.query_manager, cookie_jar.as_mut(), cookie_store.as_ref())?;
+
+    let mut result = result?;
+    result.post_action_outcomes = run_post_response_actions(
+        params.query_manager,
+        &request,
+        params.environment_id,
+        &result.response,
+        cancelled_rx.as_ref(),
+        params.encryption_manager.as_deref(),
+        &params.update_source,
+    )
+    .await;
+    Ok(result)
+}
+
+/// Run a request's enabled post-response actions against its stored response body, and record
+/// each outcome on the response timeline. Cancelled sends and sends without a stored body skip
+/// them entirely.
+async fn run_post_response_actions(
+    query_manager: &QueryManager,
+    request: &HttpRequest,
+    environment_id: Option<&str>,
+    response: &HttpResponse,
+    cancelled_rx: Option<&watch::Receiver<bool>>,
+    encryption_manager: Option<&EncryptionManager>,
+    update_source: &UpdateSource,
+) -> Vec<PostActionOutcome> {
+    let cancelled = cancelled_rx.is_some_and(|rx| *rx.borrow());
+    let Some(body_path) = response.body_path.as_deref() else {
+        return Vec::new();
+    };
+    if cancelled || !request.post_response_actions.iter().any(|action| action.enabled) {
+        return Vec::new();
+    }
+
+    let is_event_stream = response.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("content-type")
+            && header.value.to_ascii_lowercase().contains("text/event-stream")
+    });
+
+    let body_bytes;
+    let body = if is_event_stream {
+        PostActionBody::EventStream
+    } else {
+        match tokio::fs::metadata(body_path).await.map(|m| m.len()) {
+            Ok(len) if len > MAX_POST_ACTION_BODY_BYTES => {
+                PostActionBody::TooLarge { limit: MAX_POST_ACTION_BODY_BYTES }
+            }
+            _ => match tokio::fs::read(body_path).await {
+                Ok(bytes) => {
+                    body_bytes = bytes;
+                    PostActionBody::Json(&body_bytes)
+                }
+                Err(err) => PostActionBody::Unreadable(err.to_string()),
+            },
+        }
+    };
+
+    let outcomes = execute_post_response_actions(
+        query_manager,
+        request,
+        environment_id,
+        response.status,
+        body,
+        encryption_manager,
+        update_source,
+    );
+
+    for outcome in &outcomes {
+        let event = HttpResponseEvent::new(
+            &response.id,
+            &response.workspace_id,
+            HttpResponseEventData::PostResponseAction {
+                action_id: outcome.action_id.clone(),
+                variable_name: outcome.variable_name.clone(),
+                environment_id: outcome.environment_id.clone(),
+                environment_name: outcome.environment_name.clone(),
+                status: outcome.status.to_string(),
+                message: outcome.message.clone(),
+            },
+        );
+        if let Err(err) =
+            query_manager.with_tx(|tx| tx.upsert_http_response_event(&event, update_source))
+        {
+            warn!("Failed to persist post-response action event: {err}");
+        }
+    }
+    outcomes
 }
 
 pub async fn send_http_request<T: TemplateCallback>(
     params: SendHttpRequestParams<'_, T>,
 ) -> Result<SendHttpRequestResult> {
-    let environment_chain =
-        resolve_environment_chain(params.query_manager, &params.request, params.environment_id)?;
-    let (resolved_request, auth_context_id) =
-        if let Some(auth_context_id) = params.auth_context_id.clone() {
-            (params.request.clone(), auth_context_id)
-        } else {
-            resolve_inherited_request(params.query_manager, &params.request)?
-        };
-    let runtime_config = resolve_http_send_runtime_config(params.query_manager, &params.request)?;
-    let send_options = params.send_options.unwrap_or(runtime_config.send_options);
-    let resolved_settings = params
-        .query_manager
-        .connect()
-        .resolve_settings_for_http_request(&params.request)
-        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
-    let mut cookie_jar = load_cookie_jar(params.query_manager, params.cookie_jar_id.as_deref())?;
-    let cookie_store =
-        cookie_jar.as_ref().map(|jar| CookieStore::from_cookies(jar.cookies.clone()));
+    let HttpSendInputs { request, environment_chain, runtime_config, cookie_store } = params.inputs;
+    let (request, auth_context_id) = request.into_parts();
+    let storage = params.storage;
+    let send_options = runtime_config.send_options();
+    let resolved_settings = &runtime_config.settings;
     let cookie_behavior = CookieBehavior {
         store: cookie_store,
         send_cookies: resolved_settings.send_cookies.value,
@@ -502,7 +699,7 @@ pub async fn send_http_request<T: TemplateCallback>(
     };
 
     let rendered_request = render_http_request(
-        &resolved_request,
+        &request,
         environment_chain,
         params.template_callback,
         &RenderOptions::throw(),
@@ -526,8 +723,8 @@ pub async fn send_http_request<T: TemplateCallback>(
         Some(SendableBody::Stream { .. }) | None => None,
     };
     let mut response = params.existing_response.unwrap_or_default();
-    response.request_id = params.request.id.clone();
-    response.workspace_id = params.request.workspace_id.clone();
+    response.request_id = request.id.clone();
+    response.workspace_id = request.workspace_id.clone();
     response.request_content_length = request_content_length;
     response.request_headers = sendable_request
         .headers
@@ -548,12 +745,16 @@ pub async fn send_http_request<T: TemplateCallback>(
     response.elapsed = 0;
     response.elapsed_headers = 0;
     response.elapsed_dns = 0;
-    let persist_response = !response.request_id.is_empty();
-    if persist_response {
-        response = params
+    // Responses with no request behind them are ephemeral: they belong to whoever called this
+    // function and never reach the model store.
+    let store = storage.as_ref().filter(|_| !response.request_id.is_empty());
+    let persist_response = store.is_some();
+    if let Some(store) = store {
+        response = store
             .query_manager
-            .connect()
-            .upsert_http_response(&response, &params.update_source, params.blob_manager)
+            .with_tx(|tx| {
+                tx.upsert_http_response(&response, &store.update_source, store.blob_manager)
+            })
             .map_err(SendHttpRequestError::PersistResponse)?;
     } else if response.id.is_empty() {
         response.id = generate_prefixed_id("rs");
@@ -562,14 +763,12 @@ pub async fn send_http_request<T: TemplateCallback>(
     let request_body_id = format!("{}.request", response.id);
     let mut request_body_capture_task = None;
     let mut request_body_capture_error = None;
-    if persist_response {
+    if let Some(store) = store {
         match sendable_request.body.as_mut() {
             Some(SendableBody::Bytes(bytes)) => {
-                if let Err(err) = persist_request_body_bytes(
-                    params.blob_manager,
-                    &request_body_id,
-                    bytes.as_ref(),
-                ) {
+                if let Err(err) =
+                    persist_request_body_bytes(store.blob_manager, &request_body_id, bytes.as_ref())
+                {
                     request_body_capture_error = Some(err);
                 }
             }
@@ -578,7 +777,7 @@ pub async fn send_http_request<T: TemplateCallback>(
                 let inner = std::mem::replace(data, Box::pin(tokio::io::empty()));
                 let tee_reader = TeeReader::new(inner, tx);
                 *data = Box::pin(tee_reader);
-                let blob_manager = params.blob_manager.clone();
+                let blob_manager = store.blob_manager.clone();
                 let body_id = request_body_id.clone();
                 request_body_capture_task = Some(tokio::spawn(async move {
                     persist_request_body_stream(blob_manager, body_id, rx).await
@@ -590,10 +789,9 @@ pub async fn send_http_request<T: TemplateCallback>(
 
     let (event_tx, mut event_rx) =
         mpsc::channel::<SenderHttpResponseEvent>(HTTP_EVENT_CHANNEL_CAPACITY);
-    let event_query_manager = params.query_manager.clone();
+    let event_store = store.map(|store| (store.query_manager.clone(), store.update_source.clone()));
     let event_response_id = response.id.clone();
-    let event_workspace_id = params.request.workspace_id.clone();
-    let event_update_source = params.update_source.clone();
+    let event_workspace_id = request.workspace_id.clone();
     let emit_events_to = params.emit_events_to.clone();
     let dns_elapsed = Arc::new(AtomicI32::new(0));
     let event_dns_elapsed = dns_elapsed.clone();
@@ -603,15 +801,14 @@ pub async fn send_http_request<T: TemplateCallback>(
                 event_dns_elapsed.store(u64_to_i32(*duration), Ordering::Relaxed);
             }
 
-            if persist_response {
+            if let Some((query_manager, update_source)) = event_store.as_ref() {
                 let db_event = HttpResponseEvent::new(
                     &event_response_id,
                     &event_workspace_id,
                     event.clone().into(),
                 );
-                if let Err(err) = event_query_manager
-                    .connect()
-                    .upsert_http_response_event(&db_event, &event_update_source)
+                if let Err(err) = query_manager
+                    .with_tx(|tx| tx.upsert_http_response_event(&db_event, update_source))
                 {
                     warn!("Failed to persist HTTP response event: {}", err);
                 }
@@ -623,56 +820,36 @@ pub async fn send_http_request<T: TemplateCallback>(
         }
     });
 
-    let default_executor = DefaultSendRequestExecutor;
-    let executor = params.executor.unwrap_or(&default_executor);
+    let executor = params.executor;
     let started_at = Instant::now();
     let request_started_url = sendable_request.url.clone();
 
-    send_setting_event(
-        &event_tx,
-        "validate_certificates",
-        runtime_config.validate_certificates.to_string(),
-        &resolved_settings.validate_certificates,
-    );
-    send_setting_event(
-        &event_tx,
-        "redirects",
-        sendable_request.options.follow_redirects.to_string(),
-        &resolved_settings.follow_redirects,
-    );
-    send_setting_event(
-        &event_tx,
-        "timeout",
-        timeout_setting_value(sendable_request.options.timeout),
-        &resolved_settings.request_timeout,
-    );
-    send_setting_event(
-        &event_tx,
-        "send_cookies",
-        cookie_behavior.send_cookies.to_string(),
-        &resolved_settings.send_cookies,
-    );
-    send_setting_event(
-        &event_tx,
-        "store_cookies",
-        cookie_behavior.store_cookies.to_string(),
-        &resolved_settings.store_cookies,
-    );
+    for event in resolved_settings.timeline_events() {
+        if let HttpResponseEventData::Setting {
+            name,
+            value,
+            source_model,
+            source_id,
+            source_name,
+        } = event
+        {
+            let _ = event_tx.try_send(SenderHttpResponseEvent::Setting {
+                name,
+                value,
+                source_model,
+                source_id,
+                source_name,
+            });
+        }
+    }
 
     let mut http_response =
         match executor.send(sendable_request, event_tx, cookie_behavior.clone()).await {
             Ok(response) => response,
             Err(err) => {
-                persist_cookie_jar(
-                    params.query_manager,
-                    cookie_jar.as_mut(),
-                    cookie_behavior.store.as_ref(),
-                )?;
-                if persist_response {
+                if let Some(store) = store {
                     let _ = persist_response_error(
-                        params.query_manager,
-                        params.blob_manager,
-                        &params.update_source,
+                        store,
                         &response,
                         started_at,
                         err.to_string(),
@@ -690,14 +867,19 @@ pub async fn send_http_request<T: TemplateCallback>(
         };
 
     let headers_elapsed = duration_to_i32(started_at.elapsed());
-    std::fs::create_dir_all(params.response_dir).map_err(|source| {
-        SendHttpRequestError::CreateResponseDirectory {
-            path: params.response_dir.to_path_buf(),
-            source,
+    let body_path = match storage.as_ref() {
+        Some(storage) => {
+            std::fs::create_dir_all(storage.response_dir).map_err(|source| {
+                SendHttpRequestError::CreateResponseDirectory {
+                    path: storage.response_dir.to_path_buf(),
+                    source,
+                }
+            })?;
+            Some(storage.response_dir.join(&response.id))
         }
-    })?;
-    let body_path = params.response_dir.join(&response.id);
-    let response_body_path = body_path.to_string_lossy().to_string();
+        None => None,
+    };
+    let response_body_path = body_path.as_ref().map(|p| p.to_string_lossy().to_string());
     let connected_response = HttpResponse {
         state: HttpResponseState::Connected,
         elapsed_headers: headers_elapsed,
@@ -707,7 +889,7 @@ pub async fn send_http_request<T: TemplateCallback>(
         remote_addr: http_response.remote_addr.clone(),
         version: http_response.version.clone(),
         elapsed_dns: dns_elapsed.load(Ordering::Relaxed),
-        body_path: Some(response_body_path.clone()),
+        body_path: response_body_path.clone(),
         content_length: http_response.content_length.map(u64_to_i32),
         headers: http_response
             .headers
@@ -721,27 +903,44 @@ pub async fn send_http_request<T: TemplateCallback>(
             .collect(),
         ..response
     };
-    if persist_response {
-        response = params
+    if let Some(store) = store {
+        response = store
             .query_manager
-            .connect()
-            .upsert_http_response(&connected_response, &params.update_source, params.blob_manager)
+            .with_tx(|tx| {
+                tx.upsert_http_response(
+                    &connected_response,
+                    &store.update_source,
+                    store.blob_manager,
+                )
+            })
             .map_err(SendHttpRequestError::PersistResponse)?;
     } else {
         response = connected_response;
     }
 
-    let mut file =
-        File::options().create(true).truncate(true).write(true).open(&body_path).await.map_err(
-            |source| SendHttpRequestError::WriteResponseBody { path: body_path.clone(), source },
-        )?;
+    let mut body_file = match body_path {
+        Some(path) => {
+            let file =
+                File::options().create(true).truncate(true).write(true).open(&path).await.map_err(
+                    |source| SendHttpRequestError::WriteResponseBody { path: path.clone(), source },
+                )?;
+            Some((file, path))
+        }
+        None => None,
+    };
     let mut body_stream =
         http_response.into_body_stream().map_err(SendHttpRequestError::ReadResponseBody)?;
-    let mut response_body = Vec::new();
     let mut read_buf = vec![0; 64 * 1024];
-    let collect_response_body = !persist_response && params.emit_response_body_chunks_to.is_none();
+    // Decided once, before the first chunk: the accumulator only exists in the
+    // one arm that returns it, so nothing can hand back bytes it never received.
+    let mut response_body = if params.emit_response_body_chunks_to.is_some() {
+        ResponseBody::Streamed
+    } else if persist_response {
+        ResponseBody::Stored
+    } else {
+        ResponseBody::Returned(Vec::new())
+    };
     let mut body_read_error = None;
-    let mut response_cancelled = false;
     let mut written_bytes: usize = 0;
     let mut last_progress_update = started_at;
     let mut cancelled_rx = params.cancelled_rx.clone();
@@ -749,14 +948,12 @@ pub async fn send_http_request<T: TemplateCallback>(
     loop {
         let read_result = if let Some(cancelled_rx) = cancelled_rx.as_mut() {
             if *cancelled_rx.borrow() {
-                response_cancelled = true;
                 break;
             }
 
             tokio::select! {
                 biased;
                 _ = cancelled_rx.changed() => {
-                    response_cancelled = true;
                     None
                 }
                 result = body_stream.read(&mut read_buf) => {
@@ -776,13 +973,15 @@ pub async fn send_http_request<T: TemplateCallback>(
             Ok(n) => {
                 written_bytes += n;
                 let chunk = &read_buf[..n];
-                file.write_all(chunk).await.map_err(|source| {
-                    SendHttpRequestError::WriteResponseBody { path: body_path.clone(), source }
-                })?;
+                if let Some((file, path)) = body_file.as_mut() {
+                    file.write_all(chunk).await.map_err(|source| {
+                        SendHttpRequestError::WriteResponseBody { path: path.clone(), source }
+                    })?;
+                }
                 if let Some(tx) = params.emit_response_body_chunks_to.as_ref() {
                     let _ = tx.send(chunk.to_vec());
-                } else if collect_response_body {
-                    response_body.extend_from_slice(chunk);
+                } else if let ResponseBody::Returned(body) = &mut response_body {
+                    body.extend_from_slice(chunk);
                 }
 
                 let now = Instant::now();
@@ -796,15 +995,16 @@ pub async fn send_http_request<T: TemplateCallback>(
                         elapsed_dns: dns_elapsed.load(Ordering::Relaxed),
                         ..response.clone()
                     };
-                    if persist_response {
-                        response = params
+                    if let Some(store) = store {
+                        response = store
                             .query_manager
-                            .connect()
-                            .upsert_http_response(
-                                &progress_response,
-                                &params.update_source,
-                                params.blob_manager,
-                            )
+                            .with_tx(|tx| {
+                                tx.upsert_http_response(
+                                    &progress_response,
+                                    &store.update_source,
+                                    store.blob_manager,
+                                )
+                            })
                             .map_err(SendHttpRequestError::PersistResponse)?;
                     } else {
                         response = progress_response;
@@ -821,10 +1021,12 @@ pub async fn send_http_request<T: TemplateCallback>(
         }
     }
 
-    file.flush().await.map_err(|source| SendHttpRequestError::WriteResponseBody {
-        path: body_path.clone(),
-        source,
-    })?;
+    if let Some((file, path)) = body_file.as_mut() {
+        file.flush().await.map_err(|source| SendHttpRequestError::WriteResponseBody {
+            path: path.clone(),
+            source,
+        })?;
+    }
     drop(body_stream);
 
     if let Some(err) = request_body_capture_error.take() {
@@ -835,22 +1037,15 @@ pub async fn send_http_request<T: TemplateCallback>(
     }
 
     if let Some(err) = body_read_error {
-        if persist_response {
+        if let Some(store) = store {
             let _ = persist_response_error(
-                params.query_manager,
-                params.blob_manager,
-                &params.update_source,
+                store,
                 &response,
                 started_at,
                 err.to_string(),
                 request_started_url,
             );
         }
-        persist_cookie_jar(
-            params.query_manager,
-            cookie_jar.as_mut(),
-            cookie_behavior.store.as_ref(),
-        )?;
         if let Some(task) = request_body_capture_task.take() {
             match task.await {
                 Ok(Ok(_)) => {}
@@ -866,7 +1061,7 @@ pub async fn send_http_request<T: TemplateCallback>(
 
     let compressed_length = http_response.content_length.unwrap_or(written_bytes as u64);
     let final_response = HttpResponse {
-        body_path: Some(response_body_path),
+        body_path: response_body_path,
         content_length: Some(usize_to_i32(written_bytes)),
         content_length_compressed: Some(u64_to_i32(compressed_length)),
         elapsed: duration_to_i32(started_at.elapsed()),
@@ -875,17 +1070,16 @@ pub async fn send_http_request<T: TemplateCallback>(
         state: HttpResponseState::Closed,
         ..response
     };
-    if persist_response {
-        response = params
+    if let Some(store) = store {
+        response = store
             .query_manager
-            .connect()
-            .upsert_http_response(&final_response, &params.update_source, params.blob_manager)
+            .with_tx(|tx| {
+                tx.upsert_http_response(&final_response, &store.update_source, store.blob_manager)
+            })
             .map_err(SendHttpRequestError::PersistResponse)?;
     } else {
         response = final_response;
     }
-
-    persist_cookie_jar(params.query_manager, cookie_jar.as_mut(), cookie_behavior.store.as_ref())?;
 
     // Request-body history can be much larger than the response. It should not keep the
     // response in a loading state after the network/response-body work has completed.
@@ -915,11 +1109,12 @@ pub async fn send_http_request<T: TemplateCallback>(
             }
         }
 
-        if update_response && persist_response {
-            response = params
+        if update_response && let Some(store) = store {
+            response = store
                 .query_manager
-                .connect()
-                .upsert_http_response(&response, &params.update_source, params.blob_manager)
+                .with_tx(|tx| {
+                    tx.upsert_http_response(&response, &store.update_source, store.blob_manager)
+                })
                 .map_err(SendHttpRequestError::PersistResponse)?;
         }
     }
@@ -930,69 +1125,12 @@ pub async fn send_http_request<T: TemplateCallback>(
         warn!("Failed to join response event task: {}", join_err);
     }
 
-    let mut post_action_outcomes = Vec::new();
-    let has_post_actions = persist_response
-        && !response_cancelled
-        && params.request.post_response_actions.iter().any(|action| action.enabled);
-    if has_post_actions {
-        let is_event_stream = response.headers.iter().any(|header| {
-            header.name.eq_ignore_ascii_case("content-type")
-                && header.value.to_ascii_lowercase().contains("text/event-stream")
-        });
-
-        let body_bytes;
-        let body = if is_event_stream {
-            PostActionBody::EventStream
-        } else {
-            match tokio::fs::metadata(&body_path).await.map(|m| m.len()) {
-                Ok(len) if len > MAX_POST_ACTION_BODY_BYTES => {
-                    PostActionBody::TooLarge { limit: MAX_POST_ACTION_BODY_BYTES }
-                }
-                _ => match tokio::fs::read(&body_path).await {
-                    Ok(bytes) => {
-                        body_bytes = bytes;
-                        PostActionBody::Json(&body_bytes)
-                    }
-                    Err(err) => PostActionBody::Unreadable(err.to_string()),
-                },
-            }
-        };
-
-        post_action_outcomes = execute_post_response_actions(
-            params.query_manager,
-            &params.request,
-            params.environment_id,
-            response.status,
-            body,
-            params.encryption_manager.as_deref(),
-            &params.update_source,
-        );
-
-        let db = params.query_manager.connect();
-        for outcome in &post_action_outcomes {
-            let event = HttpResponseEvent::new(
-                &response.id,
-                &response.workspace_id,
-                HttpResponseEventData::PostResponseAction {
-                    action_id: outcome.action_id.clone(),
-                    variable_name: outcome.variable_name.clone(),
-                    environment_id: outcome.environment_id.clone(),
-                    environment_name: outcome.environment_name.clone(),
-                    status: outcome.status.to_string(),
-                    message: outcome.message.clone(),
-                },
-            );
-            if let Err(err) = db.upsert_http_response_event(&event, &params.update_source) {
-                warn!("Failed to persist post-response action event: {err}");
-            }
-        }
-    }
-
     Ok(SendHttpRequestResult {
         rendered_request,
         response,
         response_body,
-        post_action_outcomes,
+        cookies: cookie_behavior.store.as_ref().map(|store| store.get_all_cookies()),
+        post_action_outcomes: Vec::new(),
     })
 }
 
@@ -1005,17 +1143,14 @@ fn persist_request_body_bytes(
         return Ok(());
     }
 
-    let blob_ctx = blob_manager.connect();
-    let mut offset = 0;
-    let mut chunk_index: i32 = 0;
-    while offset < bytes.len() {
-        let end = std::cmp::min(offset + REQUEST_BODY_CHUNK_SIZE, bytes.len());
-        let chunk = BodyChunk::new(body_id, chunk_index, bytes[offset..end].to_vec());
-        blob_ctx.insert_chunk(&chunk).map_err(|e| e.to_string())?;
-        chunk_index += 1;
-        offset = end;
-    }
-    Ok(())
+    blob_manager
+        .with_tx(|b| {
+            for (chunk_index, data) in bytes.chunks(REQUEST_BODY_CHUNK_SIZE).enumerate() {
+                b.insert_chunk(&BodyChunk::new(body_id, chunk_index as i32, data.to_vec()))?;
+            }
+            Ok::<_, yaak_models::error::Error>(())
+        })
+        .map_err(|e| e.to_string())
 }
 
 async fn persist_request_body_stream(
@@ -1035,14 +1170,14 @@ async fn persist_request_body_stream(
         while buf.len() >= REQUEST_BODY_CHUNK_SIZE {
             let data = buf.drain(..REQUEST_BODY_CHUNK_SIZE).collect();
             let chunk = BodyChunk::new(&body_id, chunk_index, data);
-            blob_manager.connect().insert_chunk(&chunk).map_err(|e| e.to_string())?;
+            blob_manager.with_tx(|b| b.insert_chunk(&chunk)).map_err(|e| e.to_string())?;
             chunk_index += 1;
         }
     }
 
     if !buf.is_empty() {
         let chunk = BodyChunk::new(&body_id, chunk_index, buf);
-        blob_manager.connect().insert_chunk(&chunk).map_err(|e| e.to_string())?;
+        blob_manager.with_tx(|b| b.insert_chunk(&chunk)).map_err(|e| e.to_string())?;
     }
 
     Ok(total_bytes)
@@ -1055,37 +1190,7 @@ fn append_error_message(existing_error: Option<String>, message: String) -> Stri
     }
 }
 
-fn resolve_environment_chain(
-    query_manager: &QueryManager,
-    request: &HttpRequest,
-    environment_id: Option<&str>,
-) -> Result<Vec<Environment>> {
-    let db = query_manager.connect();
-    db.resolve_environments(&request.workspace_id, request.folder_id.as_deref(), environment_id)
-        .map_err(SendHttpRequestError::ResolveEnvironments)
-}
-
-fn resolve_inherited_request(
-    query_manager: &QueryManager,
-    request: &HttpRequest,
-) -> Result<(HttpRequest, String)> {
-    let db = query_manager.connect();
-    let (authentication_type, authentication, auth_context_id) = db
-        .resolve_auth_for_http_request(request)
-        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
-    let resolved_headers = db
-        .resolve_headers_for_http_request(request)
-        .map_err(SendHttpRequestError::ResolveRequestInheritance)?;
-
-    let mut request = request.clone();
-    request.authentication_type = authentication_type;
-    request.authentication = authentication;
-    request.headers = resolved_headers;
-
-    Ok((request, auth_context_id))
-}
-
-fn load_cookie_jar(
+pub fn load_cookie_jar(
     query_manager: &QueryManager,
     cookie_jar_id: Option<&str>,
 ) -> Result<Option<CookieJar>> {
@@ -1100,44 +1205,31 @@ fn load_cookie_jar(
         .map_err(SendHttpRequestError::LoadCookieJar)
 }
 
-fn persist_cookie_jar(
+/// Write the cookies a send collected back to its jar.
+///
+/// The store is shared with the HTTP transaction, so it holds every cookie picked up along the
+/// way no matter how the send ended — including when the response arrived but the storage work
+/// after it failed. Call this whatever the send returned; a send that failed before the
+/// transaction started leaves the store untouched, which compares equal and writes nothing.
+pub fn persist_cookies_after_send(
     query_manager: &QueryManager,
     cookie_jar: Option<&mut CookieJar>,
     cookie_store: Option<&CookieStore>,
 ) -> Result<()> {
-    match (cookie_jar, cookie_store) {
-        (Some(cookie_jar), Some(cookie_store)) => {
-            cookie_jar.cookies = cookie_store.get_all_cookies();
-            query_manager
-                .connect()
-                .upsert_cookie_jar(cookie_jar, &UpdateSource::Background)
-                .map_err(SendHttpRequestError::PersistCookieJar)?;
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
+    let (Some(cookie_jar), Some(cookie_store)) = (cookie_jar, cookie_store) else {
+        return Ok(());
+    };
 
-fn send_setting_event<T>(
-    event_tx: &mpsc::Sender<SenderHttpResponseEvent>,
-    name: impl Into<String>,
-    value: impl Into<String>,
-    setting: &ResolvedSetting<T>,
-) {
-    let _ = event_tx.try_send(SenderHttpResponseEvent::Setting {
-        name: name.into(),
-        value: value.into(),
-        source_model: Some(setting.source_model.clone()),
-        source_id: setting.source_id.clone(),
-        source_name: setting.source_name.clone(),
-    });
-}
-
-fn timeout_setting_value(timeout: Option<Duration>) -> String {
-    match timeout {
-        Some(timeout) if !timeout.is_zero() => format!("{timeout:?}"),
-        _ => "Infinity".to_string(),
+    let cookies = cookie_store.get_all_cookies();
+    if cookies == cookie_jar.cookies {
+        return Ok(());
     }
+
+    cookie_jar.cookies = cookies;
+    query_manager
+        .with_tx(|tx| tx.upsert_cookie_jar(cookie_jar, &UpdateSource::Background))
+        .map_err(SendHttpRequestError::PersistCookieJar)?;
+    Ok(())
 }
 
 fn proxy_setting_from_settings(proxy: Option<ProxySetting>) -> HttpConnectionProxySetting {
@@ -1189,6 +1281,17 @@ pub async fn apply_plugin_authentication(
                         value: value.to_string(),
                     })
                     .collect(),
+                body: match &sendable_request.body {
+                    // Bodies above the cap are not passed to auth plugins. Copying
+                    // them across the plugin IPC is too expensive, and payloads that
+                    // large are usually uploads that signing schemes treat as
+                    // unsigned anyway. Streamed bodies (files, multipart) are never
+                    // passed for the same reason.
+                    Some(SendableBody::Bytes(bytes)) if bytes.len() <= MAX_AUTH_BODY_BYTES => {
+                        String::from_utf8(bytes.to_vec()).ok()
+                    }
+                    _ => None,
+                },
             };
             let plugin_result = plugin_manager
                 .call_http_authentication(plugin_context, authentication_type, req)
@@ -1209,33 +1312,33 @@ pub async fn apply_plugin_authentication(
 }
 
 fn persist_response_error(
-    query_manager: &QueryManager,
-    blob_manager: &BlobManager,
-    update_source: &UpdateSource,
+    store: &ResponseStorage,
     response: &HttpResponse,
     started_at: Instant,
     error: String,
     fallback_url: String,
 ) -> Result<HttpResponse> {
     let elapsed = duration_to_i32(started_at.elapsed());
-    query_manager
-        .connect()
-        .upsert_http_response(
-            &HttpResponse {
-                state: HttpResponseState::Closed,
-                elapsed,
-                elapsed_headers: if response.elapsed_headers == 0 {
-                    elapsed
-                } else {
-                    response.elapsed_headers
+    store
+        .query_manager
+        .with_tx(|tx| {
+            tx.upsert_http_response(
+                &HttpResponse {
+                    state: HttpResponseState::Closed,
+                    elapsed,
+                    elapsed_headers: if response.elapsed_headers == 0 {
+                        elapsed
+                    } else {
+                        response.elapsed_headers
+                    },
+                    error: Some(error),
+                    url: if response.url.is_empty() { fallback_url } else { response.url.clone() },
+                    ..response.clone()
                 },
-                error: Some(error),
-                url: if response.url.is_empty() { fallback_url } else { response.url.clone() },
-                ..response.clone()
-            },
-            update_source,
-            blob_manager,
-        )
+                &store.update_source,
+                store.blob_manager,
+            )
+        })
         .map_err(SendHttpRequestError::PersistResponse)
 }
 
@@ -1268,23 +1371,22 @@ fn u128_to_i32(value: u128) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap, VecDeque};
-    use std::io::Cursor;
-    use std::sync::Mutex;
+    use std::collections::HashMap;
+    use std::pin::Pin;
+    use tempfile::TempDir;
+    use tokio::io::AsyncRead;
     use yaak_http::decompress::ContentEncoding;
-    use yaak_models::init_in_memory;
-    use yaak_models::models::{PostResponseAction, Workspace};
-    use yaak_templates::error::Result as TemplateResult;
+    use yaak_models::models::{CookieDomain, CookieExpires, Workspace};
 
-    struct EmptyTemplateCallback;
+    struct NoopTemplateCallback;
 
-    impl TemplateCallback for EmptyTemplateCallback {
+    impl TemplateCallback for NoopTemplateCallback {
         async fn run(
             &self,
             _fn_name: &str,
             _args: HashMap<String, serde_json::Value>,
-        ) -> TemplateResult<String> {
-            unreachable!("The integration test does not use template functions")
+        ) -> yaak_templates::error::Result<String> {
+            Ok(String::new())
         }
 
         fn transform_arg(
@@ -1292,14 +1394,258 @@ mod tests {
             _fn_name: &str,
             _arg_name: &str,
             arg_value: &str,
-        ) -> TemplateResult<String> {
+        ) -> yaak_templates::error::Result<String> {
             Ok(arg_value.to_string())
         }
     }
 
+    struct StubExecutor {
+        body: &'static [u8],
+    }
+
+    #[async_trait]
+    impl SendRequestExecutor for StubExecutor {
+        async fn send(
+            &self,
+            sendable_request: SendableHttpRequest,
+            event_tx: mpsc::Sender<SenderHttpResponseEvent>,
+            _cookie_behavior: CookieBehavior,
+        ) -> yaak_http::error::Result<yaak_http::sender::HttpResponse> {
+            let _ = event_tx.try_send(SenderHttpResponseEvent::HeaderDown(
+                "content-type".to_string(),
+                "text/plain".to_string(),
+            ));
+            let body: Pin<Box<dyn AsyncRead + Send>> =
+                Box::pin(std::io::Cursor::new(self.body.to_vec()));
+            Ok(yaak_http::sender::HttpResponse::new(
+                200,
+                Some("OK".to_string()),
+                vec![("content-type".to_string(), "text/plain".to_string())],
+                Vec::new(),
+                Some(self.body.len() as u64),
+                sendable_request.url.clone(),
+                None,
+                Some("HTTP/1.1".to_string()),
+                body,
+                ContentEncoding::Identity,
+            ))
+        }
+    }
+
+    /// The hosted sender runs with no query manager, blob manager, or response directory. Nothing
+    /// here touches storage, so the caller's only view of the response is what gets streamed out.
+    #[tokio::test]
+    async fn sends_without_a_database() {
+        let (event_tx, mut event_rx) = mpsc::channel(HTTP_EVENT_CHANNEL_CAPACITY);
+        let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel();
+        let executor = StubExecutor { body: b"hello world" };
+
+        let result = send_http_request(SendHttpRequestParams {
+            inputs: HttpSendInputs {
+                request: ResolvedHttpRequest::assume_resolved(
+                    HttpRequest {
+                        workspace_id: "wk_test".to_string(),
+                        url: "http://localhost/test".to_string(),
+                        ..Default::default()
+                    },
+                    String::new(),
+                ),
+                environment_chain: Vec::new(),
+                runtime_config: HttpSendRuntimeConfig {
+                    settings: ResolvedHttpRequestSettings::default(),
+                    proxy: HttpConnectionProxySetting::System,
+                    dns_overrides: Vec::new(),
+                    client_certificates: Vec::new(),
+                },
+                cookie_store: Some(CookieStore::new()),
+            },
+            template_callback: &NoopTemplateCallback,
+            storage: None,
+            emit_events_to: Some(event_tx),
+            emit_response_body_chunks_to: Some(chunk_tx),
+            cancelled_rx: None,
+            existing_response: None,
+            prepare_sendable_request: None,
+            executor: &executor,
+        })
+        .await
+        .expect("send should succeed without a database");
+
+        assert_eq!(result.response.status, 200);
+        assert!(matches!(result.response.state, HttpResponseState::Closed));
+        assert_eq!(result.response.content_length, Some(11));
+        assert!(result.cookies.is_some());
+
+        // Nothing was written, so the response carries no body file and only ever lived in memory.
+        assert_eq!(result.response.body_path, None);
+        assert!(!result.response.id.is_empty());
+
+        let mut body = Vec::new();
+        while let Some(chunk) = chunk_rx.recv().await {
+            body.extend_from_slice(&chunk);
+        }
+        assert_eq!(body, b"hello world");
+
+        let mut events = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            events.push(event);
+        }
+        assert!(
+            events.iter().any(
+                |e| matches!(e, SenderHttpResponseEvent::Setting { name, .. } if name == "redirects")
+            ),
+            "expected timeline settings events, got {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, SenderHttpResponseEvent::HeaderDown(..))),
+            "expected timeline events from the executor, got {events:?}"
+        );
+    }
+
+    /// A response nothing stores has to hand its body back, because no later
+    /// read can find it: there is no row to look up and no id to read it by.
+    /// GraphQL introspection is the caller that depends on this.
+    #[tokio::test]
+    async fn returns_the_body_when_nothing_stores_it() {
+        let executor = StubExecutor { body: b"hello world" };
+
+        let result = send_http_request(SendHttpRequestParams {
+            inputs: HttpSendInputs {
+                request: ResolvedHttpRequest::assume_resolved(
+                    HttpRequest {
+                        workspace_id: "wk_test".to_string(),
+                        url: "http://localhost/test".to_string(),
+                        ..Default::default()
+                    },
+                    String::new(),
+                ),
+                environment_chain: Vec::new(),
+                runtime_config: HttpSendRuntimeConfig {
+                    settings: ResolvedHttpRequestSettings::default(),
+                    proxy: HttpConnectionProxySetting::System,
+                    dns_overrides: Vec::new(),
+                    client_certificates: Vec::new(),
+                },
+                cookie_store: Some(CookieStore::new()),
+            },
+            template_callback: &NoopTemplateCallback,
+            storage: None,
+            emit_events_to: None,
+            // No chunk sender: the body is collected for the caller instead.
+            emit_response_body_chunks_to: None,
+            cancelled_rx: None,
+            existing_response: None,
+            prepare_sendable_request: None,
+            executor: &executor,
+        })
+        .await
+        .expect("send should succeed without a database");
+
+        let ResponseBody::Returned(body) = result.response_body else {
+            panic!("a response nothing stores has to hand its body back");
+        };
+        assert_eq!(body, b"hello world");
+        assert!(result.response.request_id.is_empty(), "an unsaved response has no request");
+    }
+
+    fn seed_cookie_jar() -> (QueryManager, CookieJar, TempDir) {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let (query_manager, _blob_manager, _rx) = yaak_models::init_standalone(
+            &temp_dir.path().join("db.sqlite"),
+            &temp_dir.path().join("blobs.sqlite"),
+        )
+        .expect("Failed to initialize DB");
+
+        query_manager
+            .with_tx(|tx| {
+                tx.upsert_workspace(
+                    &Workspace { id: "wk_test".to_string(), ..Default::default() },
+                    &UpdateSource::Sync,
+                )
+            })
+            .expect("Failed to seed workspace");
+        let cookie_jar = query_manager
+            .with_tx(|tx| {
+                tx.upsert_cookie_jar(
+                    &CookieJar {
+                        id: "cj_test".to_string(),
+                        workspace_id: "wk_test".to_string(),
+                        name: "Default".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Sync,
+                )
+            })
+            .expect("Failed to seed cookie jar");
+
+        (query_manager, cookie_jar, temp_dir)
+    }
+
+    fn cookie(name: &str) -> Cookie {
+        Cookie {
+            name: name.to_string(),
+            value: "value".to_string(),
+            domain: CookieDomain::HostOnly("localhost".to_string()),
+            expires: CookieExpires::SessionEnd,
+            path: "/".to_string(),
+            secure: false,
+            http_only: false,
+            same_site: None,
+        }
+    }
+
+    /// Cookies the transaction collected must survive no matter how the send ended, including the
+    /// storage work that runs after a response has already arrived.
+    #[test]
+    fn persists_cookies_collected_before_a_failure() {
+        let (query_manager, mut cookie_jar, _temp_dir) = seed_cookie_jar();
+        let store = CookieStore::from_cookies(cookie_jar.cookies.clone());
+        store.store_cookies_from_response(
+            &"http://localhost/test".parse().expect("valid url"),
+            &["session=abc123; Path=/".to_string()],
+        );
+
+        persist_cookies_after_send(&query_manager, Some(&mut cookie_jar), Some(&store))
+            .expect("Failed to persist cookies");
+
+        let stored =
+            query_manager.connect().get_cookie_jar("cj_test").expect("Failed to load cookie jar");
+        assert_eq!(stored.cookies.len(), 1);
+        assert_eq!(stored.cookies[0].name, "session");
+        assert_eq!(stored.cookies[0].value, "abc123");
+    }
+
+    /// A send that failed before the transaction started leaves the store untouched, so there is
+    /// nothing to write and a concurrent update to the jar must not be clobbered.
+    #[test]
+    fn leaves_the_jar_alone_when_no_cookies_changed() {
+        let (query_manager, mut cookie_jar, _temp_dir) = seed_cookie_jar();
+        cookie_jar.cookies = vec![cookie("original")];
+        cookie_jar = query_manager
+            .with_tx(|tx| tx.upsert_cookie_jar(&cookie_jar, &UpdateSource::Sync))
+            .expect("Failed to seed cookies");
+        let store = CookieStore::from_cookies(cookie_jar.cookies.clone());
+
+        // Someone else updates the jar while the send is in flight.
+        query_manager
+            .with_tx(|tx| {
+                tx.upsert_cookie_jar(
+                    &CookieJar { cookies: vec![cookie("newer")], ..cookie_jar.clone() },
+                    &UpdateSource::Sync,
+                )
+            })
+            .expect("Failed to update cookie jar");
+
+        persist_cookies_after_send(&query_manager, Some(&mut cookie_jar), Some(&store))
+            .expect("Failed to persist cookies");
+
+        let stored =
+            query_manager.connect().get_cookie_jar("cj_test").expect("Failed to load cookie jar");
+        assert_eq!(stored.cookies, vec![cookie("newer")]);
+    }
     struct MockExecutor {
-        response_bodies: Mutex<VecDeque<Vec<u8>>>,
-        requested_urls: Mutex<Vec<String>>,
+        response_bodies: std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
+        requested_urls: std::sync::Mutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -1326,103 +1672,102 @@ mod tests {
                 sendable_request.url,
                 None,
                 Some("HTTP/1.1".to_string()),
-                Box::pin(Cursor::new(body)),
+                Box::pin(std::io::Cursor::new(body)),
                 ContentEncoding::Identity,
             ))
         }
     }
 
-    #[test]
-    fn post_action_value_is_available_to_the_next_request() {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let (query_manager, blob_manager, _rx) = init_in_memory().unwrap();
-                let workspace = query_manager
-                    .connect()
-                    .upsert_workspace(
-                        &Workspace { name: "Test".to_string(), ..Default::default() },
-                        &UpdateSource::Background,
-                    )
-                    .unwrap();
-                let first_request = query_manager
-                    .connect()
-                    .upsert_http_request(
-                        &HttpRequest {
-                            workspace_id: workspace.id.clone(),
-                            name: "Get token".to_string(),
-                            method: "GET".to_string(),
-                            url: "https://example.test/token".to_string(),
-                            post_response_actions: vec![PostResponseAction {
-                                enabled: true,
-                                action_type: "set_environment_variable".to_string(),
-                                json_path: "$.token".to_string(),
-                                variable_name: "ACCESS_TOKEN".to_string(),
-                                ..Default::default()
-                            }],
+    #[tokio::test]
+    async fn post_action_value_is_available_to_the_next_request() {
+        use yaak_models::models::PostResponseAction;
+
+        // A file-backed DB: resolving send inputs holds a read connection while opening another,
+        // which the single-connection in-memory pool cannot serve.
+        let db_dir = TempDir::new().unwrap();
+        let (query_manager, blob_manager, _rx) = yaak_models::init_standalone(
+            &db_dir.path().join("db.sqlite"),
+            &db_dir.path().join("blobs.sqlite"),
+        )
+        .unwrap();
+        let workspace = query_manager
+            .with_tx(|db| {
+                db.upsert_workspace(
+                    &Workspace { name: "Test".to_string(), ..Default::default() },
+                    &UpdateSource::Background,
+                )
+            })
+            .unwrap();
+        let first_request = query_manager
+            .with_tx(|db| {
+                db.upsert_http_request(
+                    &HttpRequest {
+                        workspace_id: workspace.id.clone(),
+                        name: "Get token".to_string(),
+                        method: "GET".to_string(),
+                        url: "https://example.test/token".to_string(),
+                        post_response_actions: vec![PostResponseAction {
+                            enabled: true,
+                            action_type: "set_environment_variable".to_string(),
+                            json_path: "$.token".to_string(),
+                            variable_name: "ACCESS_TOKEN".to_string(),
                             ..Default::default()
-                        },
-                        &UpdateSource::Background,
-                    )
-                    .unwrap();
-                let second_request = query_manager
-                    .connect()
-                    .upsert_http_request(
-                        &HttpRequest {
-                            workspace_id: workspace.id.clone(),
-                            name: "Use token".to_string(),
-                            method: "GET".to_string(),
-                            url: "https://example.test/users/${[ ACCESS_TOKEN ]}".to_string(),
-                            body: BTreeMap::new(),
-                            ..Default::default()
-                        },
-                        &UpdateSource::Background,
-                    )
-                    .unwrap();
-                let executor = MockExecutor {
-                    response_bodies: Mutex::new(VecDeque::from([
-                        br#"{"token":"token-from-response"}"#.to_vec(),
-                        br#"{}"#.to_vec(),
-                    ])),
-                    requested_urls: Mutex::new(Vec::new()),
-                };
-                let response_dir = tempfile::tempdir().unwrap();
-                let callback = EmptyTemplateCallback;
+                        }],
+                        ..Default::default()
+                    },
+                    &UpdateSource::Background,
+                )
+            })
+            .unwrap();
+        let second_request = query_manager
+            .with_tx(|db| {
+                db.upsert_http_request(
+                    &HttpRequest {
+                        workspace_id: workspace.id.clone(),
+                        name: "Use token".to_string(),
+                        method: "GET".to_string(),
+                        url: "https://example.test/users/${[ ACCESS_TOKEN ]}".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Background,
+                )
+            })
+            .unwrap();
+        let executor = MockExecutor {
+            response_bodies: std::sync::Mutex::new(std::collections::VecDeque::from([
+                br#"{"token":"token-from-response"}"#.to_vec(),
+                br#"{}"#.to_vec(),
+            ])),
+            requested_urls: std::sync::Mutex::new(Vec::new()),
+        };
+        let response_dir = TempDir::new().unwrap();
+        let callback = NoopTemplateCallback;
 
-                let send = |request: HttpRequest| SendHttpRequestParams {
-                    query_manager: &query_manager,
-                    blob_manager: &blob_manager,
-                    request,
-                    environment_id: None,
-                    template_callback: &callback,
-                    send_options: Some(SendableHttpRequestOptions::default()),
-                    update_source: UpdateSource::Background,
-                    cookie_jar_id: None,
-                    response_dir: response_dir.path(),
-                    emit_events_to: None,
-                    emit_response_body_chunks_to: None,
-                    cancelled_rx: None,
-                    auth_context_id: None,
-                    existing_response: None,
-                    prepare_sendable_request: None,
-                    executor: Some(&executor),
-                    encryption_manager: None,
-                };
+        let send = |request_id| SendHttpRequestByIdParams {
+            query_manager: &query_manager,
+            blob_manager: &blob_manager,
+            request_id,
+            environment_id: None,
+            template_callback: &callback,
+            update_source: UpdateSource::Background,
+            cookie_jar_id: None,
+            response_dir: response_dir.path(),
+            emit_events_to: None,
+            emit_response_body_chunks_to: None,
+            cancelled_rx: None,
+            prepare_sendable_request: None,
+            executor: &executor,
+            encryption_manager: None,
+        };
 
-                let first_result = send_http_request(send(first_request)).await.unwrap();
-                assert_eq!(first_result.post_action_outcomes.len(), 1);
-                assert_eq!(first_result.post_action_outcomes[0].status, "success");
+        let first_result = send_http_request_by_id(send(&first_request.id)).await.unwrap();
+        assert_eq!(first_result.post_action_outcomes.len(), 1);
+        assert_eq!(first_result.post_action_outcomes[0].status, "success");
 
-                send_http_request(send(second_request)).await.unwrap();
-                assert_eq!(
-                    executor.requested_urls.lock().unwrap().as_slice(),
-                    [
-                        "https://example.test/token",
-                        "https://example.test/users/token-from-response",
-                    ]
-                );
-            });
+        send_http_request_by_id(send(&second_request.id)).await.unwrap();
+        assert_eq!(
+            executor.requested_urls.lock().unwrap().as_slice(),
+            ["https://example.test/token", "https://example.test/users/token-from-response",]
+        );
     }
 }

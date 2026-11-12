@@ -1,5 +1,6 @@
 import { useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpRequest } from "@yaakapp-internal/models";
+import { platform } from "@yaakapp-internal/platform";
 
 import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
@@ -12,6 +13,7 @@ import type { DropdownItem } from "../core/Dropdown";
 import { Dropdown } from "../core/Dropdown";
 import type { EditorProps } from "../core/Editor/Editor";
 import { Editor } from "../core/Editor/LazyEditor";
+import { IconButton } from "../core/IconButton";
 import type { RadioDropdownItem } from "../core/RadioDropdown";
 import { RadioDropdown } from "../core/RadioDropdown";
 import { Banner, FormattedError, Icon } from "@yaakapp-internal/ui";
@@ -19,6 +21,7 @@ import { Separator } from "../core/Separator";
 import { tryFormatGraphql } from "../../lib/formatters";
 import { parseGraphQLOperationNames } from "../../lib/graphqlOperationNames";
 import { normalizeGraphQLBody } from "../../lib/requestBodyConversion";
+import { revealInFinderText } from "../../lib/reveal";
 import { showGraphQLDocExplorerAtom } from "./graphqlAtoms";
 
 type Props = Pick<EditorProps, "heightMode" | "className" | "forceUpdateKey"> & {
@@ -28,6 +31,10 @@ type Props = Pick<EditorProps, "heightMode" | "className" | "forceUpdateKey"> & 
 };
 
 const OPERATION_NAME_NOT_SPECIFIED = "";
+
+// How much of the end of a schema filename is pinned when middle-truncating it.
+// Enough to keep the extension and a little of the name before it.
+const FILE_NAME_TAIL_CHARS = 12;
 
 export function GraphQLEditor(props: Props) {
   // There's some weirdness with stale onChange being called when switching requests, so we'll
@@ -40,9 +47,41 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
   const [autoIntrospectDisabled, setAutoIntrospectDisabled] = useLocalStorage<
     Record<string, boolean>
   >("graphQLAutoIntrospectDisabled", {});
-  const { schema, isLoading, error, refetch, clear } = useIntrospectGraphQL(baseRequest, {
+  const {
+    schema,
+    isLoading,
+    error,
+    refetch,
+    clear,
+    loadFromFile,
+    reloadFromFile,
+    removeSchemaFile,
+    filePath,
+  } = useIntrospectGraphQL(baseRequest, {
     disabled: autoIntrospectDisabled?.[baseRequest.id],
   });
+
+  // Last path segment, for display only. The host owns real path semantics; this
+  // just needs something short enough to label the divider with.
+  const fileName = useMemo(() => filePath?.split(/[/\\]/).pop() || filePath, [filePath]);
+
+  // Selecting a file is all it takes — the request's source becomes that file,
+  // which is what keeps automatic introspection from overwriting it.
+  const handleLoadFromFile = useCallback(async () => {
+    const selected = await platform.dialog.open({
+      title: t("graphql.loadSchemaTitle"),
+      multiple: false,
+      filters: [
+        {
+          name: t("graphql.schemaFileFilter"),
+          extensions: ["graphql", "graphqls", "gql", "json"],
+        },
+      ],
+    });
+    if (selected == null) return;
+
+    await loadFromFile(selected);
+  }, [loadFromFile, t]);
   const [currentBody, setCurrentBody] = useStateWithDeps<{
     query: string;
     variables: string | undefined;
@@ -165,9 +204,32 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                       color: "danger",
                       leftSlot: <Icon icon="trash" />,
                     },
-                    { type: "separator" },
                   ]
                 : []) satisfies DropdownItem[]),
+              {
+                // Labels the source actions below it, so the menu says where the
+                // schema came from without spending a row on it.
+                type: "separator",
+                hidden: schema == null && filePath == null,
+                label:
+                  fileName == null || filePath == null ? undefined : (
+                    // Middle truncation: the head shrinks and ellipsizes while the
+                    // tail is pinned, so the extension always survives. Full path
+                    // on hover.
+                    <div className="flex min-w-0 max-w-[16rem] font-mono text-xs" title={filePath}>
+                      <span className="truncate">{fileName.slice(0, -FILE_NAME_TAIL_CHARS)}</span>
+                      <span className="shrink-0">{fileName.slice(-FILE_NAME_TAIL_CHARS)}</span>
+                    </div>
+                  ),
+                action:
+                  filePath == null
+                    ? undefined
+                    : {
+                        icon: "folder_symlink",
+                        title: revealInFinderText,
+                        onClick: () => platform.revealItemInDir(filePath),
+                      },
+              },
               {
                 hidden: !error,
                 label: (
@@ -210,25 +272,39 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
                 type: "content",
               },
               {
-                hidden: schema == null,
-                label: isDocOpen ? t("graphql.hideDocumentation") : t("graphql.showDocumentation"),
-                leftSlot: <Icon icon="book_open_text" />,
-                onSelect: () => {
-                  setGraphqlDocStateAtomValue((v) => ({
-                    ...v,
-                    [request.id]: isDocOpen ? undefined : null,
-                  }));
+                // One refresh action for either source: re-read the file, or
+                // re-introspect the server.
+                label: t("graphql.reloadSchema"),
+                leftSlot: <Icon icon="refresh" spin={isLoading} />,
+                keepOpenOnSelect: true,
+                // Failures surface through the hook's error state either way.
+                onSelect: async () => {
+                  if (filePath != null) await reloadFromFile();
+                  else await refetch();
                 },
               },
               {
-                label: t("graphql.introspectSchema"),
-                leftSlot: <Icon icon="refresh" spin={isLoading} />,
-                keepOpenOnSelect: true,
-                onSelect: refetch,
+                label:
+                  filePath == null
+                    ? t("graphql.loadSchemaFromFile")
+                    : t("graphql.loadDifferentFile"),
+                leftSlot: <Icon icon="import" />,
+                onSelect: handleLoadFromFile,
               },
-              { type: "separator", label: t("graphql.settingSection") },
               {
-                label: t("graphql.automaticIntrospection"),
+                hidden: filePath == null,
+                label: t("graphql.stopUsingFile"),
+                leftSlot: <Icon icon="x" />,
+                onSelect: removeSchemaFile,
+              },
+              { type: "separator", label: t("graphql.settingsSection") },
+              {
+                // Governs both sources: re-introspecting the server, and
+                // re-reading the file when the request is opened.
+                label:
+                  filePath == null
+                    ? t("graphql.automaticIntrospection")
+                    : t("graphql.automaticReload"),
                 keepOpenOnSelect: true,
                 onSelect: () => {
                   setAutoIntrospectDisabled({
@@ -256,10 +332,37 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
               color={error ? "danger" : "default"}
               forDropdown
             >
-              {error ? t("graphql.introspectionFailed") : schema ? "Schema" : t("graphql.noSchema")}
+              {error
+                ? t("graphql.introspectionFailed")
+                : schema
+                  ? t("graphql.schema")
+                  : t("graphql.noSchema")}
             </Button>
           </Dropdown>
         )}
+      </div>,
+      // Sits after the schema control it depends on. Always rendered, disabled
+      // without a schema, so the row never changes shape.
+      <div key="documentation" className="opacity-100!">
+        <IconButton
+          size="sm"
+          variant="border"
+          icon="book_open_text"
+          disabled={schema == null}
+          title={
+            schema == null
+              ? t("graphql.documentationUnavailable")
+              : isDocOpen
+                ? t("graphql.hideDocumentation")
+                : t("graphql.showDocumentation")
+          }
+          onClick={() => {
+            setGraphqlDocStateAtomValue((v) => ({
+              ...v,
+              [request.id]: isDocOpen ? undefined : null,
+            }));
+          }}
+        />
       </div>,
     ],
     [
@@ -272,6 +375,11 @@ function GraphQLEditorInner({ request, onChange, baseRequest, ...extraEditorProp
       isLoading,
       operationNames,
       refetch,
+      handleLoadFromFile,
+      reloadFromFile,
+      removeSchemaFile,
+      filePath,
+      fileName,
       autoIntrospectDisabled,
       baseRequest.id,
       setGraphqlDocStateAtomValue,

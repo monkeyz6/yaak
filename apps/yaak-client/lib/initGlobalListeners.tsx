@@ -1,5 +1,3 @@
-import { emit } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { debounce } from "@yaakapp-internal/lib";
 import type {
   FormInput,
@@ -14,53 +12,55 @@ import type {
   UpdateResponse,
   YaakNotification,
 } from "@yaakapp-internal/tauri-client";
-import { HStack, Icon, VStack } from "@yaakapp-internal/ui";
+import { HStack, Icon, InlineCode, VStack } from "@yaakapp-internal/ui";
 import { openSettings } from "../commands/openSettings";
 import { Button } from "../components/core/Button";
 import { ButtonInfiniteLoading } from "../components/core/ButtonInfiniteLoading";
 
 // Listen for toasts
+import { platform } from "@yaakapp-internal/platform";
 import { i18n } from "@yaakapp-internal/i18n";
 import type { ModelPayload } from "@yaakapp-internal/models";
 import { activeWorkspaceIdAtom } from "../hooks/useActiveWorkspace";
-import { listenToTauriEvent } from "../hooks/useListenToTauriEvent";
 import { updateAvailableAtom } from "./atoms";
 import { stringToColor } from "./color";
 import { generateId } from "./generateId";
 import { jotaiStore } from "./jotai";
 import { showPrompt } from "./prompt";
 import { showPromptForm } from "./prompt-form";
-import { invokeCmd } from "./tauri";
+import { rpc } from "./rpc";
 import { showToast } from "./toast";
 
 export function initGlobalListeners() {
-  listenToTauriEvent<ShowToastRequest>("show_toast", (event) => {
-    showToast({ ...event.payload });
+  platform.listen<ShowToastRequest>("show_toast", (payload) => {
+    showToast({ ...payload });
   });
 
   // Surface failed or risky post-response actions as toasts (details stay in the timeline)
-  listenToTauriEvent<ModelPayload>("model_write", ({ payload }) => {
-    if (payload.change.type !== "upsert") return;
-    const model = payload.model;
-    if (model.model !== "http_response_event") return;
-    if (model.workspaceId !== jotaiStore.get(activeWorkspaceIdAtom)) return;
-    const event = model.event;
-    if (event.type !== "post_response_action") return;
-    if (event.status !== "error" && event.status !== "warning") return;
-    showToast({
-      id: `post-action-${event.status}-${event.variable_name}`,
-      color: event.status === "error" ? "danger" : "notice",
-      message: i18n.t(
-        event.status === "error"
-          ? "postResponse.actionFailedToast"
-          : "postResponse.actionWarningToast",
-        { name: event.variable_name, message: event.message },
-      ),
-    });
+  platform.listen<ModelPayload[]>("model_writes", (payloads) => {
+    for (const payload of payloads) {
+      if (payload.change.type !== "upsert") continue;
+      const model = payload.model;
+      if (model.model !== "http_response_event") continue;
+      if (model.workspaceId !== jotaiStore.get(activeWorkspaceIdAtom)) continue;
+      const event = model.event;
+      if (event.type !== "post_response_action") continue;
+      if (event.status !== "error" && event.status !== "warning") continue;
+      showToast({
+        id: `post-action-${event.status}-${event.variable_name}`,
+        color: event.status === "error" ? "danger" : "notice",
+        message: i18n.t(
+          event.status === "error"
+            ? "postResponse.actionFailedToast"
+            : "postResponse.actionWarningToast",
+          { name: event.variable_name, message: event.message },
+        ),
+      });
+    }
   });
 
   // Show errors for any plugins that failed to load during startup
-  void invokeCmd<[string, string][]>("cmd_plugin_init_errors").then((errors) => {
+  void rpc<[string, string][]>("cmd_plugin_init_errors").then((errors) => {
     for (const [dir, err] of errors) {
       const name = dir.split(/[/\\]/).pop() ?? dir;
       showToast({
@@ -85,13 +85,13 @@ export function initGlobalListeners() {
     }
   });
 
-  listenToTauriEvent("settings", () => openSettings.mutate(null));
+  platform.listen("settings", () => openSettings.mutate(null));
 
   // Track active dynamic form dialogs so follow-up input updates can reach them
   const activeForms = new Map<string, (inputs: FormInput[]) => void>();
 
   // Listen for plugin events
-  listenToTauriEvent<InternalEvent>("plugin_event", async ({ payload: event }) => {
+  platform.listen<InternalEvent>("plugin_event", async (event) => {
     if (event.payload.type === "prompt_text_request") {
       const value = await showPrompt(event.payload);
       const result: InternalEvent = {
@@ -105,7 +105,7 @@ export function initGlobalListeners() {
           value,
         },
       };
-      await emit(event.id, result);
+      await platform.emit(event.id, result);
     } else if (event.payload.type === "prompt_form_request") {
       if (event.replyId != null) {
         // Follow-up update from plugin runtime — update the active dialog's inputs
@@ -130,7 +130,7 @@ export function initGlobalListeners() {
             done,
           },
         };
-        void emit(event.id, result);
+        void platform.emit(event.id, result);
       };
 
       const values = await showPromptForm({
@@ -151,24 +151,24 @@ export function initGlobalListeners() {
     }
   });
 
-  listenToTauriEvent<string>("update_installed", async ({ payload: version }) => {
+  platform.listen<string>("update_installed", async (version) => {
     console.log("Got update installed event", version);
     showUpdateInstalledToast(version);
   });
 
   // Listen for update events
-  listenToTauriEvent<UpdateInfo>("update_available", async ({ payload }) => {
+  platform.listen<UpdateInfo>("update_available", async (payload) => {
     console.log("Got update available", payload);
     void showUpdateAvailableToast(payload);
   });
 
-  listenToTauriEvent<YaakNotification>("notification", ({ payload }) => {
+  platform.listen<YaakNotification>("notification", (payload) => {
     console.log("Got notification event", payload);
     showNotificationToast(payload);
   });
 
   // Listen for plugin update events
-  listenToTauriEvent<PluginUpdateNotification>("plugin_updates_available", ({ payload }) => {
+  platform.listen<PluginUpdateNotification>("plugin_updates_available", (payload) => {
     console.log("Got plugin updates event", payload);
     showPluginUpdatesToast(payload);
   });
@@ -195,7 +195,7 @@ function showUpdateInstalledToast(version: string) {
         loadingChildren={i18n.t("updates.restarting")}
         onClick={() => {
           hide();
-          setTimeout(() => invokeCmd("cmd_restart", {}), 200);
+          setTimeout(() => rpc("cmd_restart", {}), 200);
         }}
       >
         {i18n.t("updates.relaunch")}
@@ -206,12 +206,68 @@ function showUpdateInstalledToast(version: string) {
 
 async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
   const UPDATE_TOAST_ID = "update-info";
-  const { version, replyEventId, downloaded } = updateInfo;
+  const { version, replyEventId, downloaded, install } = updateInfo;
 
-  jotaiStore.set(updateAvailableAtom, { version, downloaded });
+  jotaiStore.set(updateAvailableAtom, { version, downloaded, install });
+
+  const whatsNewButton = (
+    <Button
+      size="xs"
+      color="info"
+      variant="border"
+      rightSlot={<Icon icon="external_link" />}
+      onClick={async () => {
+        await platform.openUrl(`https://yaak.app/changelog/${version}`);
+      }}
+    >
+      {i18n.t("updates.whatsNew")}
+    </Button>
+  );
+
+  if (install !== "integrated") {
+    // Nothing to reply to here; the backend only told us so we can say how to update
+    const flatpak = install === "flatpak";
+    showToast({
+      id: UPDATE_TOAST_ID,
+      color: "info",
+      timeout: null,
+      message: (
+        <VStack>
+          <h2 className="font-semibold">Yaak {version} is available</h2>
+          <p className="text-text-subtle text-sm">
+            {flatpak ? (
+              <>
+                Update with <InlineCode>flatpak update</InlineCode> or your software center.
+              </>
+            ) : (
+              "Download the new version to upgrade."
+            )}
+          </p>
+        </VStack>
+      ),
+      action: () => (
+        <HStack space={1.5}>
+          {!flatpak && (
+            <Button
+              size="xs"
+              color="info"
+              rightSlot={<Icon icon="external_link" />}
+              onClick={async () => {
+                await platform.openUrl("https://yaak.app/download");
+              }}
+            >
+              Download
+            </Button>
+          )}
+          {whatsNewButton}
+        </HStack>
+      ),
+    });
+    return;
+  }
 
   // Acknowledge the event, so we don't time out and try the fallback update logic
-  await emit<UpdateResponse>(replyEventId, { type: "ack" });
+  await platform.emit(replyEventId, { type: "ack" } satisfies UpdateResponse);
 
   showToast({
     id: UPDATE_TOAST_ID,
@@ -235,25 +291,15 @@ async function showUpdateAvailableToast(updateInfo: UpdateInfo) {
             downloaded ? i18n.t("updates.installing") : i18n.t("updates.downloading")
           }
           onClick={async () => {
-            await emit<UpdateResponse>(replyEventId, {
+            await platform.emit(replyEventId, {
               type: "action",
               action: "install",
-            });
+            } satisfies UpdateResponse);
           }}
         >
           {downloaded ? i18n.t("updates.installNow") : i18n.t("updates.downloadAndInstall")}
         </ButtonInfiniteLoading>
-        <Button
-          size="xs"
-          color="info"
-          variant="border"
-          rightSlot={<Icon icon="external_link" />}
-          onClick={async () => {
-            await openUrl(`https://yaak.app/changelog/${version}`);
-          }}
-        >
-          {i18n.t("updates.whatsNew")}
-        </Button>
+        {whatsNewButton}
       </HStack>
     ),
   });
@@ -340,7 +386,7 @@ function showNotificationToast(n: YaakNotification) {
       </VStack>
     ),
     onClose: () => {
-      invokeCmd("cmd_dismiss_notification", { notificationId: n.id }).catch(console.error);
+      rpc("cmd_dismiss_notification", { notificationId: n.id }).catch(console.error);
     },
     action: ({ hide }) => {
       return actionLabel && actionUrl ? (
@@ -351,7 +397,7 @@ function showNotificationToast(n: YaakNotification) {
           rightSlot={<Icon icon="external_link" />}
           onClick={() => {
             hide();
-            return openUrl(actionUrl);
+            return platform.openUrl(actionUrl);
           }}
         >
           {actionLabel}

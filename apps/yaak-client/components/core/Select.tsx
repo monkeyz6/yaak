@@ -1,4 +1,4 @@
-import { type } from "@tauri-apps/plugin-os";
+import { platform } from "@yaakapp-internal/platform";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import { HStack } from "@yaakapp-internal/ui";
 import classNames from "classnames";
@@ -68,7 +68,7 @@ export function Select<T extends string>({
       <Label htmlFor={id} visuallyHidden={hideLabel} className={labelClassName} help={help}>
         {label}
       </Label>
-      {type() === "macos" && !filterable ? (
+      {platform.osType() === "macos" && !filterable ? (
         <HStack
           space={2}
           className={classNames(
@@ -130,9 +130,13 @@ export function Select<T extends string>({
           )}
         >
           <Button
-            className="w-full text-sm font-mono"
+            className={classNames(
+              "w-full text-sm font-mono",
+              disabled && "border-dotted",
+              isInvalidSelection && "border-danger",
+            )}
             justify="start"
-            variant="border"
+            variant="input"
             size={size}
             leftSlot={leftSlot}
             disabled={disabled}

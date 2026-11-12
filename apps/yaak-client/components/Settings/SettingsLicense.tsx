@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Trans, useTranslation } from "@yaakapp-internal/i18n";
 import { useLicense } from "@yaakapp-internal/license";
 import { Banner, HStack, Icon, VStack } from "@yaakapp-internal/ui";
@@ -12,6 +11,7 @@ import { Button } from "../core/Button";
 import { Link } from "../core/Link";
 import { PlainInput } from "../core/PlainInput";
 import { Separator } from "../core/Separator";
+import { platform } from "@yaakapp-internal/platform";
 
 export function SettingsLicense() {
   return (
@@ -150,7 +150,9 @@ function SettingsLicenseCmp() {
           <Button
             color="secondary"
             size="sm"
-            onClick={() => openUrl("https://yaak.app/dashboard?intent=app.license.support")}
+            onClick={() =>
+              platform.openUrl("https://yaak.app/dashboard?intent=app.license.support")
+            }
             rightSlot={<Icon icon="external_link" />}
           >
             {t("settings.directSupport")}
@@ -166,7 +168,9 @@ function SettingsLicenseCmp() {
             color="primary"
             rightSlot={<Icon icon="external_link" />}
             onClick={() =>
-              openUrl(pricingUrl(`app.license.purchase.${check.data?.status ?? "unknown"}`))
+              platform.openUrl(
+                pricingUrl(`app.license.purchase.${check.data?.status ?? "unknown"}`),
+              )
             }
           >
             {t("mainMenu.purchaseLicense")}

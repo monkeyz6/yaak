@@ -59,10 +59,13 @@ pub fn execute_post_response_actions(
             .collect();
     }
 
-    let target = query_manager.with_conn(|db| match environment_id {
-        Some(id) => db.get_environment(id).ok(),
-        None => db.get_base_environment(&request.workspace_id).ok(),
-    });
+    let target = match environment_id {
+        Some(id) => query_manager.connect().get_environment(id).ok(),
+        // Base environments are created lazily, so make sure one exists to write into
+        None => query_manager
+            .with_tx(|db| db.ensure_base_environment(&request.workspace_id))
+            .ok(),
+    };
     let Some(target) = target else {
         return actions
             .into_iter()
@@ -285,24 +288,29 @@ mod tests {
         let (query_manager, _blob_manager, _rx) =
             init_in_memory().expect("Failed to initialize test database");
         let workspace = query_manager
-            .connect()
-            .upsert_workspace(
-                &Workspace { name: "Test".to_string(), ..Default::default() },
-                &UpdateSource::Background,
-            )
+            .with_tx(|db| {
+                db.upsert_workspace(
+                    &Workspace { name: "Test".to_string(), ..Default::default() },
+                    &UpdateSource::Background,
+                )
+            })
             .expect("Failed to create workspace");
         let environment = query_manager
-            .connect()
-            .upsert_environment(
-                &Environment {
-                    workspace_id: workspace.id.clone(),
-                    name: "Private".to_string(),
-                    parent_model: "environment".to_string(),
-                    ..Default::default()
-                },
-                &UpdateSource::Background,
-            )
+            .with_tx(|db| {
+                db.upsert_environment(
+                    &Environment {
+                        workspace_id: workspace.id.clone(),
+                        name: "Private".to_string(),
+                        parent_model: "environment".to_string(),
+                        ..Default::default()
+                    },
+                    &UpdateSource::Background,
+                )
+            })
             .expect("Failed to create environment");
+        query_manager
+            .with_tx(|db| db.ensure_base_environment(&workspace.id))
+            .expect("Failed to create base environment");
         let request = HttpRequest { workspace_id: workspace.id, ..Default::default() };
         (query_manager, request, environment)
     }
@@ -386,8 +394,7 @@ mod tests {
             id: None,
         });
         let environment = query_manager
-            .connect()
-            .upsert_environment(&environment, &UpdateSource::Background)
+            .with_tx(|db| db.upsert_environment(&environment, &UpdateSource::Background))
             .unwrap();
         let missing = action("$.missing");
         let mut valid = action("$.next");
@@ -416,8 +423,7 @@ mod tests {
         let (query_manager, mut request, mut environment) = setup();
         environment.public = true;
         let environment = query_manager
-            .connect()
-            .upsert_environment(&environment, &UpdateSource::Background)
+            .with_tx(|db| db.upsert_environment(&environment, &UpdateSource::Background))
             .unwrap();
         request.post_response_actions = vec![action("$.token")];
 

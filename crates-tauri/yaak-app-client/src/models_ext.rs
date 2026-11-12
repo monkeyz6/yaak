@@ -10,14 +10,11 @@ use tauri::plugin::TauriPlugin;
 use tauri::{Emitter, Manager, Runtime, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use yaak_models::blob_manager::BlobManager;
-use yaak_models::client_db::ClientDb;
+use yaak_models::client_db::{ClientDb, WriteDb};
 use yaak_models::error::Result;
-use yaak_models::models::{AnyModel, GraphQlIntrospection, GrpcEvent, Settings, WebsocketEvent};
 use yaak_models::query_manager::QueryManager;
 use yaak_models::util::{ModelPayload, UpdateSource};
-use yaak_plugins::manager::PluginManager;
 
-const MODEL_CHANGES_RETENTION_HOURS: i64 = 1;
 const MODEL_CHANGES_POLL_INTERVAL_MS: u64 = 1000;
 const MODEL_CHANGES_POLL_BATCH_SIZE: usize = 200;
 
@@ -98,7 +95,7 @@ pub trait QueryManagerExt<'a, R> {
     fn db(&'a self) -> ClientDb<'a>;
     fn with_tx<F, T>(&'a self, func: F) -> Result<T>
     where
-        F: FnOnce(&ClientDb) -> Result<T>;
+        F: FnOnce(&WriteDb) -> Result<T>;
 }
 
 impl<'a, R: Runtime, M: Manager<R>> QueryManagerExt<'a, R> for M {
@@ -113,7 +110,7 @@ impl<'a, R: Runtime, M: Manager<R>> QueryManagerExt<'a, R> for M {
 
     fn with_tx<F, T>(&'a self, func: F) -> Result<T>
     where
-        F: FnOnce(&ClientDb) -> Result<T>,
+        F: FnOnce(&WriteDb) -> Result<T>,
     {
         let qm = self.state::<QueryManager>();
         qm.inner().with_tx(func)
@@ -123,225 +120,12 @@ impl<'a, R: Runtime, M: Manager<R>> QueryManagerExt<'a, R> for M {
 /// Extension trait for accessing the BlobManager from Tauri Manager types.
 pub trait BlobManagerExt<'a, R> {
     fn blob_manager(&'a self) -> State<'a, BlobManager>;
-    fn blobs(&'a self) -> yaak_models::blob_manager::BlobContext;
 }
 
 impl<'a, R: Runtime, M: Manager<R>> BlobManagerExt<'a, R> for M {
     fn blob_manager(&'a self) -> State<'a, BlobManager> {
         self.state::<BlobManager>()
     }
-
-    fn blobs(&'a self) -> yaak_models::blob_manager::BlobContext {
-        let manager = self.state::<BlobManager>();
-        manager.inner().connect()
-    }
-}
-
-// Commands for yaak-models
-use tauri::WebviewWindow;
-
-#[tauri::command]
-pub(crate) fn models_upsert<R: Runtime>(
-    window: WebviewWindow<R>,
-    model: AnyModel,
-) -> Result<String> {
-    use yaak_models::error::Error::GenericError;
-
-    let db = window.db();
-    let blobs = window.blob_manager();
-    let source = &UpdateSource::from_window_label(window.label());
-    let id = match model {
-        AnyModel::CookieJar(m) => db.upsert_cookie_jar(&m, source)?.id,
-        AnyModel::Environment(m) => db.upsert_environment(&m, source)?.id,
-        AnyModel::Folder(m) => db.upsert_folder(&m, source)?.id,
-        AnyModel::GrpcRequest(m) => db.upsert_grpc_request(&m, source)?.id,
-        AnyModel::HttpRequest(m) => db.upsert_http_request(&m, source)?.id,
-        AnyModel::HttpResponse(m) => db.upsert_http_response(&m, source, &blobs)?.id,
-        AnyModel::KeyValue(m) => db.upsert_key_value(&m, source)?.id,
-        AnyModel::Plugin(m) => db.upsert_plugin(&m, source)?.id,
-        AnyModel::Settings(m) => db.upsert_settings(&m, source)?.id,
-        AnyModel::WebsocketRequest(m) => db.upsert_websocket_request(&m, source)?.id,
-        AnyModel::Workspace(m) => db.upsert_workspace(&m, source)?.id,
-        AnyModel::WorkspaceMeta(m) => db.upsert_workspace_meta(&m, source)?.id,
-        a => return Err(GenericError(format!("Cannot upsert AnyModel {a:?})"))),
-    };
-
-    Ok(id)
-}
-
-// Async so cascading deletes (e.g. a workspace with thousands of requests) run on a
-// blocking thread instead of stalling the main thread and all other IPC.
-#[tauri::command]
-pub(crate) async fn models_delete<R: Runtime>(
-    window: WebviewWindow<R>,
-    model: AnyModel,
-) -> Result<String> {
-    use yaak_models::error::Error::GenericError;
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let blobs = window.blob_manager();
-        // Use transaction for deletions because it might recurse
-        window.with_tx(|tx| {
-            let source = &UpdateSource::from_window_label(window.label());
-            let id = match model {
-                AnyModel::CookieJar(m) => tx.delete_cookie_jar(&m, source)?.id,
-                AnyModel::Environment(m) => tx.delete_environment(&m, source)?.id,
-                AnyModel::Folder(m) => tx.delete_folder(&m, source)?.id,
-                AnyModel::GrpcConnection(m) => tx.delete_grpc_connection(&m, source)?.id,
-                AnyModel::GrpcRequest(m) => tx.delete_grpc_request(&m, source)?.id,
-                AnyModel::HttpRequest(m) => tx.delete_http_request(&m, source)?.id,
-                AnyModel::HttpResponse(m) => tx.delete_http_response(&m, source, &blobs)?.id,
-                AnyModel::Plugin(m) => tx.delete_plugin(&m, source)?.id,
-                AnyModel::WebsocketConnection(m) => tx.delete_websocket_connection(&m, source)?.id,
-                AnyModel::WebsocketRequest(m) => tx.delete_websocket_request(&m, source)?.id,
-                AnyModel::Workspace(m) => tx.delete_workspace(&m, source, &blobs)?.id,
-                a => return Err(GenericError(format!("Cannot delete AnyModel {a:?})"))),
-            };
-            Ok(id)
-        })
-    })
-    .await
-    .map_err(|e| GenericError(format!("Delete task failed: {e}")))?
-}
-
-#[tauri::command]
-pub(crate) fn models_duplicate<R: Runtime>(
-    window: WebviewWindow<R>,
-    model_type: String,
-    model_id: String,
-) -> Result<String> {
-    use yaak_models::error::Error::GenericError;
-
-    // Use transaction for duplications because it might recurse
-    window.with_tx(|tx| {
-        let source = &UpdateSource::from_window_label(window.label());
-        // Fetch the model fresh from the DB so the duplicate doesn't come from
-        // a stale frontend snapshot
-        let id = match model_type.as_str() {
-            "environment" => {
-                tx.duplicate_environment(&tx.get_environment(&model_id)?, source)?.id
-            }
-            "folder" => tx.duplicate_folder(&tx.get_folder(&model_id)?, source)?.id,
-            "grpc_request" => {
-                tx.duplicate_grpc_request(&tx.get_grpc_request(&model_id)?, source)?.id
-            }
-            "http_request" => {
-                tx.duplicate_http_request(&tx.get_http_request(&model_id)?, source)?.id
-            }
-            "websocket_request" => {
-                tx.duplicate_websocket_request(&tx.get_websocket_request(&model_id)?, source)?.id
-            }
-            t => return Err(GenericError(format!("Cannot duplicate model type {t}"))),
-        };
-
-        Ok(id)
-    })
-}
-
-#[tauri::command]
-pub(crate) fn models_websocket_events<R: Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    connection_id: &str,
-) -> Result<Vec<WebsocketEvent>> {
-    Ok(app_handle.db().list_websocket_events(connection_id)?)
-}
-
-#[tauri::command]
-pub(crate) fn models_grpc_events<R: Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    connection_id: &str,
-) -> Result<Vec<GrpcEvent>> {
-    Ok(app_handle.db().list_grpc_events(connection_id)?)
-}
-
-#[tauri::command]
-pub(crate) fn models_get_settings<R: Runtime>(app_handle: tauri::AppHandle<R>) -> Result<Settings> {
-    Ok(app_handle.db().get_settings())
-}
-
-#[tauri::command]
-pub(crate) fn models_get_graphql_introspection<R: Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    request_id: &str,
-) -> Result<Option<GraphQlIntrospection>> {
-    Ok(app_handle.db().get_graphql_introspection(request_id))
-}
-
-#[tauri::command]
-pub(crate) fn models_upsert_graphql_introspection<R: Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    request_id: &str,
-    workspace_id: &str,
-    content: Option<String>,
-    window: WebviewWindow<R>,
-) -> Result<GraphQlIntrospection> {
-    let source = UpdateSource::from_window_label(window.label());
-    Ok(app_handle.db().upsert_graphql_introspection(workspace_id, request_id, content, &source)?)
-}
-
-#[tauri::command]
-pub(crate) async fn models_workspace_models<R: Runtime>(
-    window: WebviewWindow<R>,
-    workspace_id: Option<&str>,
-    plugin_manager: State<'_, PluginManager>,
-) -> Result<String> {
-    let mut l: Vec<AnyModel> = Vec::new();
-
-    // Add the global models
-    {
-        let db = window.db();
-        l.push(db.get_settings().into());
-        l.append(&mut db.list_workspaces()?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_key_values()?.into_iter().map(Into::into).collect());
-    }
-
-    let plugins = {
-        let db = window.db();
-        db.list_plugins()?
-    };
-
-    let plugins = plugin_manager.resolve_plugins_for_runtime_from_db(plugins).await;
-    l.append(&mut plugins.into_iter().map(Into::into).collect());
-
-    // Add the workspace children
-    if let Some(wid) = workspace_id {
-        let db = window.db();
-        l.append(&mut db.list_cookie_jars(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_environments_ensure_base(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_folders(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_grpc_connections(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_grpc_requests(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_http_requests(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_http_responses(wid, None)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_websocket_connections(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_websocket_requests(wid)?.into_iter().map(Into::into).collect());
-        l.append(&mut db.list_workspace_metas(wid)?.into_iter().map(Into::into).collect());
-    }
-
-    let j = serde_json::to_string(&l)?;
-
-    Ok(escape_str_for_webview(&j))
-}
-
-fn escape_str_for_webview(input: &str) -> String {
-    input
-        .chars()
-        .map(|c| {
-            let code = c as u32;
-            // ASCII
-            if code <= 0x7F {
-                c.to_string()
-                // BMP characters encoded normally
-            } else if code < 0xFFFF {
-                format!("\\u{:04X}", code)
-                // Beyond BMP encoded a surrogate pairs
-            } else {
-                let high = ((code - 0x10000) >> 10) + 0xD800;
-                let low = ((code - 0x10000) & 0x3FF) + 0xDC00;
-                format!("\\u{:04X}\\u{:04X}", high, low)
-            }
-        })
-        .collect()
 }
 
 /// Initialize database managers as a plugin (for initialization order).
@@ -367,29 +151,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                     }
                 };
 
-            let db = query_manager.connect();
-            if let Err(err) = db.prune_model_changes_older_than_hours(MODEL_CHANGES_RETENTION_HOURS)
-            {
-                error!("Failed to prune model_changes rows on startup: {err:?}");
-            }
             // Only stream writes that happen after this app launch.
             let cursor = ModelChangeCursor::from_launch_time();
 
             let poll_query_manager = query_manager.clone();
-
-            // GC response bodies orphaned by cascade deletes, which historically
-            // didn't clean the blob DB or responses directory
-            let gc_query_manager = query_manager.clone();
-            let gc_blob_manager = blob_manager.clone();
-            let gc_responses_dir = app_path.join("responses");
-            tauri::async_runtime::spawn_blocking(move || {
-                let db = gc_query_manager.connect();
-                match db.delete_orphaned_response_bodies(&gc_blob_manager, &gc_responses_dir) {
-                    Ok(0) => {}
-                    Ok(n) => log::info!("Deleted {n} orphaned response bodies"),
-                    Err(e) => error!("Failed to delete orphaned response bodies: {e:?}"),
-                }
-            });
 
             app_handle.manage(query_manager);
             app_handle.manage(blob_manager);

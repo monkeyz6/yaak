@@ -1,21 +1,25 @@
 import type { DialogSize } from "@yaakapp-internal/plugins";
+import { Heading, HStack, Overlay } from "@yaakapp-internal/ui";
 import { useTranslation } from "@yaakapp-internal/i18n";
-import { Heading, Overlay } from "@yaakapp-internal/ui";
 import classNames from "classnames";
 import * as m from "motion/react-m";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { Button, type ButtonProps } from "./Button";
 import { IconButton } from "./IconButton";
 
 export interface DialogProps {
   children: ReactNode;
   open: boolean;
   onClose?: () => void;
-  disableBackdropClose?: boolean;
+  /** Block dismissal from the backdrop, Escape key, and built-in close button. */
+  disableClose?: boolean;
   title?: ReactNode;
   description?: ReactNode;
   className?: string;
   size?: DialogSize;
+  /** Hide the built-in close button without changing backdrop or Escape behavior. */
   hideX?: boolean;
   noPadding?: boolean;
   noScroll?: boolean;
@@ -28,7 +32,7 @@ export function Dialog({
   size = "full",
   open,
   onClose,
-  disableBackdropClose,
+  disableClose,
   title,
   description,
   hideX,
@@ -38,13 +42,14 @@ export function Dialog({
 }: DialogProps) {
   const { t } = useTranslation();
   const titleId = useMemo(() => Math.random().toString(36).slice(2), []);
+  const [footerEl, setFooterEl] = useState<HTMLDivElement | null>(null);
   const descriptionId = useMemo(
     () => (description ? Math.random().toString(36).slice(2) : undefined),
     [description],
   );
 
   return (
-    <Overlay open={open} onClose={disableBackdropClose ? undefined : onClose} portalName="dialog">
+    <Overlay open={open} onClose={disableClose ? undefined : onClose} portalName="dialog">
       <div
         role="dialog"
         className={classNames(
@@ -60,7 +65,7 @@ export function Dialog({
           // NOTE: We handle Escape on the element itself so that it doesn't close multiple
           //   dialogs and can be intercepted by children if needed.
           if (e.key === "Escape") {
-            onClose?.();
+            if (!disableClose) onClose?.();
             e.stopPropagation();
             e.preventDefault();
           }
@@ -71,7 +76,7 @@ export function Dialog({
           animate={{ top: 0, scale: 1 }}
           className={classNames(
             className,
-            "grid grid-rows-[auto_auto_minmax(0,1fr)]",
+            "grid grid-rows-[auto_auto_minmax(0,1fr)_auto]",
             "grid-cols-1", // must be here for inline code blocks to correctly break words
             "relative bg-surface pointer-events-auto",
             "rounded-lg",
@@ -108,11 +113,13 @@ export function Dialog({
               !noScroll && "overflow-y-auto overflow-x-hidden",
             )}
           >
-            {children}
+            <DialogFooterSlot.Provider value={footerEl}>{children}</DialogFooterSlot.Provider>
           </div>
 
+          <div ref={setFooterEl} className="contents" />
+
           {/*Put close at the end so that it's the last thing to be tabbed to*/}
-          {!hideX && (
+          {!disableClose && !hideX && (
             <div className="ml-auto absolute right-1 top-1">
               <IconButton
                 className="opacity-70 hover:opacity-100"
@@ -128,4 +135,68 @@ export function Dialog({
       </div>
     </Overlay>
   );
+}
+
+const DialogFooterSlot = createContext<HTMLDivElement | null>(null);
+
+export interface DialogFooterAction {
+  label: string;
+  onClick?: () => void;
+  /** Submit the form with this id, which can be anywhere in the dialog body */
+  form?: string;
+  color?: ButtonProps["color"];
+  variant?: ButtonProps["variant"];
+  disabled?: boolean;
+  isLoading?: boolean;
+  autoFocus?: boolean;
+  leftSlot?: ReactNode;
+  rightSlot?: ReactNode;
+}
+
+/**
+ * The action row at the bottom of a dialog. Render it anywhere in the dialog's content and it is
+ * placed below the scrolling body, outside its padding. `inline` drops the divider for small
+ * dialogs whose body never scrolls.
+ */
+export function DialogFooter({
+  actions,
+  leftSlot,
+  inline,
+}: {
+  actions: DialogFooterAction[];
+  leftSlot?: ReactNode;
+  inline?: boolean;
+}) {
+  const slot = useContext(DialogFooterSlot);
+  const footer = (
+    <footer
+      className={classNames(
+        "px-6 flex items-center gap-3",
+        inline ? "pt-1 pb-4" : "py-3 border-t border-border-subtle",
+      )}
+    >
+      {leftSlot != null && <div className="mr-auto min-w-0">{leftSlot}</div>}
+      <HStack space={2} justifyContent="end" className="ml-auto shrink-0">
+        {actions.map((action, i) => (
+          <Button
+            // Labels change with state ("Cloning...", "Apply 3 Changes"), so they can't be keys
+            key={i}
+            type={action.form != null ? "submit" : "button"}
+            form={action.form}
+            color={action.color ?? "secondary"}
+            variant={action.variant ?? (action.color == null ? "border" : "solid")}
+            disabled={action.disabled}
+            isLoading={action.isLoading}
+            autoFocus={action.autoFocus}
+            leftSlot={action.leftSlot}
+            rightSlot={action.rightSlot}
+            onClick={action.onClick}
+          >
+            {action.label}
+          </Button>
+        ))}
+      </HStack>
+    </footer>
+  );
+  return slot == null ? footer : createPortal(footer, slot);
 }

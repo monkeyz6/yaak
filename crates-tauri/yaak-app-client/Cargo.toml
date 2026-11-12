@@ -39,7 +39,7 @@ md5 = "0.8.0"
 notify = "8.0.0"
 pretty_graphql = "0.2"
 r2d2 = "0.8.10"
-r2d2_sqlite = "0.25.0"
+r2d2_sqlite = "0.32"
 mime_guess = "2.0.5"
 rand = "0.9.0"
 reqwest = { workspace = true, features = [
@@ -48,7 +48,8 @@ reqwest = { workspace = true, features = [
   "brotli",
   "deflate",
   "json",
-  "rustls-tls-manual-roots-no-provider",
+  "query",
+  "rustls-no-provider",
   "socks",
   "http2",
 ] }
@@ -68,16 +69,19 @@ tauri-plugin-updater = "2.10.1"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tokio-stream = "0.1.17"
-tokio-tungstenite = { version = "0.26.2", default-features = false }
+tokio-tungstenite = { version = "0.30.0", default-features = false }
 url = "2"
 tokio-util = { version = "0.7", features = ["codec"] }
 ts-rs = { workspace = true }
+yaak-rpc = { workspace = true }
+yaak-rpc-schema = { workspace = true }
 uuid = "1.12.1"
 yaak-api = { workspace = true }
 yaak-common = { workspace = true }
 yaak-tauri-utils = { workspace = true }
 yaak-core = { workspace = true }
 yaak = { workspace = true }
+yaak-commands = { workspace = true }
 yaak-crypto = { workspace = true }
 yaak-fonts = { workspace = true }
 yaak-git = { workspace = true }
@@ -85,6 +89,7 @@ yaak-grpc = { workspace = true }
 yaak-http = { workspace = true }
 yaak-license = { workspace = true, optional = true }
 yaak-mac-window = { workspace = true }
+yaak-lifecycle = { workspace = true }
 yaak-models = { workspace = true }
 yaak-plugins = { workspace = true }
 yaak-sse = { workspace = true }

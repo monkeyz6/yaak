@@ -9,7 +9,6 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { basename } from "@tauri-apps/api/path";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import classNames from "classnames";
 import type { ReactNode } from "react";
@@ -36,6 +35,7 @@ import { Input } from "./Input";
 import { ensurePairId } from "./PairEditor.util";
 import type { RadioDropdownItem } from "./RadioDropdown";
 import { RadioDropdown } from "./RadioDropdown";
+import { platform } from "@yaakapp-internal/platform";
 
 export interface PairEditorHandle {
   /**
@@ -116,7 +116,15 @@ function toPairData({ commitName: _commitName, ...pair }: EditablePairWithId): P
 /** Max number of pairs to show before prompting the user to reveal the rest */
 const MAX_INITIAL_PAIRS = 30;
 
-export function PairEditor({
+// Keyed on `stateKey` so no state survives a change of owner. Row ids alone can't tell owners
+// apart — two pair sets can share ids (eg. one duplicated from the other), and the same-rows
+// fast path below would swap in the new data without rebuilding the row editors, leaving any
+// still-focused input showing the old owner's text.
+export function PairEditor(props: PairEditorProps) {
+  return <PairEditorInner key={props.stateKey} {...props} />;
+}
+
+function PairEditorInner({
   allowFileValues,
   allowMultilineValues,
   className,
@@ -872,7 +880,7 @@ function FileActionsDropdown({
         leftSlot: <Icon icon="file_code" />,
         onSelect: async () => {
           console.log("PAIR", pair);
-          const defaultFilename = await basename(pair.value ?? "");
+          const defaultFilename = await platform.files.basename(pair.value ?? "");
           const filename = await showPrompt({
             id: "filename",
             title: t("request.overrideFilename"),

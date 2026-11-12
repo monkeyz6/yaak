@@ -1,36 +1,38 @@
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type as osType } from "@tauri-apps/plugin-os";
+import { platform } from "@yaakapp-internal/platform";
 import { setWindowTheme } from "@yaakapp-internal/mac-window";
 import type { ModelPayload } from "@yaakapp-internal/models";
 import type { Appearance } from "@yaakapp-internal/theme";
 import {
   applyThemeToDocument,
   getCSSAppearance,
+  getSystemAppearance,
+  getWindowAppearance,
   subscribeToPreferredAppearanceChange,
-  subscribeToSystemAppearanceChange,
 } from "@yaakapp-internal/theme";
 import { getSettings } from "./lib/settings";
 import { getResolvedTheme } from "./lib/themes";
 
-// NOTE: CSS appearance isn't as accurate as getting it async from the window (next step), but we want
-//  a good appearance guess so we're not waiting too long
-let preferredAppearance: Appearance = getInitialAppearance();
-let linuxSystemAppearanceAvailable =
-  osType() === "linux" && window.__YAAK_INITIAL_APPEARANCE_SOURCE__ === "linux-system";
+// NOTE: The appearance the OS prefers (never the one the settings force). The backend
+//  injects it on macOS and Linux; the CSS guess is only a fallback until the async
+//  window value arrives below.
+let preferredAppearance: Appearance = getSystemAppearance() ?? getCSSAppearance();
 let configureThemeGeneration = 0;
 let windowShown = false;
 
 configureThemeAndShow().catch((err) => console.log("Failed to configure theme", err));
 
-subscribeToPreferredAppearanceChange(async (a) => {
-  if (linuxSystemAppearanceAvailable) return;
-  preferredAppearance = a;
-  await configureThemeAndShow();
-});
+if (getSystemAppearance() == null) {
+  // The initial appearance is only a guess, so confirm it with the window once it's available
+  getWindowAppearance()
+    .then(async (a) => {
+      if (a === preferredAppearance) return;
+      preferredAppearance = a;
+      await configureThemeAndShow();
+    })
+    .catch((err) => console.log("Failed to get window appearance", err));
+}
 
-subscribeToSystemAppearanceChange(async (a) => {
-  linuxSystemAppearanceAvailable = true;
+subscribeToPreferredAppearanceChange(async (a) => {
   preferredAppearance = a;
   await configureThemeAndShow();
 });
@@ -41,19 +43,19 @@ async function configureThemeAndShow() {
     windowShown = true;
     // To prevent theme flashing, the backend hides new windows by default, so we
     // need to show it here, after configuring the theme for the first time.
-    await getCurrentWebviewWindow().show();
+    await platform.window.show();
   }
 }
 
 // Listen for settings changes, the re-compute theme
-listen<ModelPayload[]>("model_writes", async (event) => {
-  const relevant = event.payload.some(
+platform.listen<ModelPayload[]>("model_writes", async (payloads) => {
+  const relevant = payloads.some(
     (p) =>
       p.change.type === "upsert" && (p.model.model === "settings" || p.model.model === "plugin"),
   );
   if (!relevant) return;
   await configureThemeAndShow();
-}).catch(console.error);
+});
 
 async function configureTheme(): Promise<boolean> {
   const generation = ++configureThemeGeneration;
@@ -75,19 +77,4 @@ async function configureTheme(): Promise<boolean> {
   }
 
   return true;
-}
-
-function getInitialAppearance(): Appearance {
-  const initialAppearance = window.__YAAK_INITIAL_APPEARANCE__;
-  if (initialAppearance === "dark" || initialAppearance === "light") {
-    return initialAppearance;
-  }
-  return getCSSAppearance();
-}
-
-declare global {
-  interface Window {
-    __YAAK_INITIAL_APPEARANCE__?: Appearance;
-    __YAAK_INITIAL_APPEARANCE_SOURCE__?: "settings" | "linux-system";
-  }
 }

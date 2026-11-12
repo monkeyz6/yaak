@@ -112,6 +112,8 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
     [activeRequest.url, activeRequest.urlParameters, handleRenamePathPlaceholder],
   );
 
+  const hasDescription = activeRequest.description.trim().length > 0;
+
   const tabs = useMemo<TabItem[]>(() => {
     return [
       {
@@ -133,9 +135,10 @@ export function WebsocketRequestPane({ style, fullHeight, className, activeReque
       {
         value: TAB_DESCRIPTION,
         label: t("request.info"),
+        rightSlot: hasDescription && <CountBadge count={true} />,
       },
     ];
-  }, [authTab, headersTab, numSettingsOverrides, t, urlParameterPairs.length]);
+  }, [authTab, hasDescription, headersTab, numSettingsOverrides, t, urlParameterPairs.length]);
 
   const { activeResponse } = usePinnedHttpResponse(activeRequestId);
   const { mutate: cancelResponse } = useCancelHttpResponse(activeResponse?.id ?? null);

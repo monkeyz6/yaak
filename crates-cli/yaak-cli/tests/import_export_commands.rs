@@ -83,14 +83,21 @@ fn import_reads_yaak_workspace_file() {
 
     let query_manager = query_manager(data_dir);
     let db = query_manager.connect();
-    assert_eq!(
-        db.get_workspace("wrk_import").expect("workspace imported").name,
-        "Imported Workspace"
-    );
-    assert_eq!(
-        db.get_http_request("req_import").expect("request imported").url,
-        "https://example.com"
-    );
+    let workspaces = db.list_workspaces().expect("list imported workspaces");
+    let workspace = workspaces
+        .iter()
+        .find(|workspace| workspace.name == "Imported Workspace")
+        .expect("workspace imported");
+    assert_ne!(workspace.id, "wrk_import");
+
+    let requests = db.list_http_requests(&workspace.id).expect("list imported requests");
+    let request = requests
+        .iter()
+        .find(|request| request.name == "Imported Request")
+        .expect("request imported");
+    assert_ne!(request.id, "req_import");
+    assert_eq!(request.workspace_id, workspace.id);
+    assert_eq!(request.url, "https://example.com");
 }
 
 fn write_postman_environment_fixture(path: &std::path::Path) {
@@ -155,8 +162,7 @@ fn import_postman_environment_uses_workspace_id() {
 
     let query_manager = query_manager(data_dir);
     let db = query_manager.connect();
-    let environments =
-        db.list_environments_ensure_base(&workspace_id).expect("list imported environments");
+    let environments = db.list_environments(&workspace_id).expect("list imported environments");
 
     let imported_environment =
         environments.iter().find(|e| e.name == "Local").expect("postman environment imported");
@@ -165,85 +171,83 @@ fn import_postman_environment_uses_workspace_id() {
 
 fn seed_folder_export_tree(data_dir: &std::path::Path, workspace_id: &str) {
     let query_manager = query_manager(data_dir);
-    let db = query_manager.connect();
-    db.upsert_folder(
-        &Folder {
-            id: "fl_users".into(),
-            workspace_id: workspace_id.into(),
-            name: "Users".into(),
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed root folder");
-    db.upsert_folder(
-        &Folder {
-            id: "fl_admin".into(),
-            workspace_id: workspace_id.into(),
-            folder_id: Some("fl_users".into()),
-            name: "Admin".into(),
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed nested folder");
-    db.upsert_http_request(
-        &HttpRequest {
-            id: "rq_get_user".into(),
-            workspace_id: workspace_id.into(),
-            folder_id: Some("fl_users".into()),
-            name: "Get user".into(),
-            method: "GET".into(),
-            url: "${[ baseUrl ]}/users/:id".into(),
-            url_parameters: vec![HttpUrlParameter {
-                name: ":id".into(),
-                value: "1".into(),
-                enabled: true,
-                id: None,
-            }],
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed get user");
-    db.upsert_http_request(
-        &HttpRequest {
-            id: "rq_list".into(),
-            workspace_id: workspace_id.into(),
-            folder_id: Some("fl_admin".into()),
-            name: "List".into(),
-            method: "GET".into(),
-            url: "${[ baseUrl ]}/users".into(),
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed list");
-    db.upsert_http_request(
-        &HttpRequest {
-            id: "rq_fn".into(),
-            workspace_id: workspace_id.into(),
-            folder_id: Some("fl_users".into()),
-            name: "Random id".into(),
-            method: "GET".into(),
-            url: "https://example.com/${[ uuid() ]}".into(),
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed function request");
-    db.upsert_grpc_request(
-        &GrpcRequest {
-            id: "gr_users".into(),
-            workspace_id: workspace_id.into(),
-            folder_id: Some("fl_users".into()),
-            name: "UserService".into(),
-            url: "https://example.com".into(),
-            ..Default::default()
-        },
-        &UpdateSource::Sync,
-    )
-    .expect("seed grpc");
+    query_manager
+        .with_tx(|db| {
+            db.upsert_folder(
+                &Folder {
+                    id: "fl_users".into(),
+                    workspace_id: workspace_id.into(),
+                    name: "Users".into(),
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            db.upsert_folder(
+                &Folder {
+                    id: "fl_admin".into(),
+                    workspace_id: workspace_id.into(),
+                    folder_id: Some("fl_users".into()),
+                    name: "Admin".into(),
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            db.upsert_http_request(
+                &HttpRequest {
+                    id: "rq_get_user".into(),
+                    workspace_id: workspace_id.into(),
+                    folder_id: Some("fl_users".into()),
+                    name: "Get user".into(),
+                    method: "GET".into(),
+                    url: "${[ baseUrl ]}/users/:id".into(),
+                    url_parameters: vec![HttpUrlParameter {
+                        name: ":id".into(),
+                        value: "1".into(),
+                        enabled: true,
+                        id: None,
+                    }],
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            db.upsert_http_request(
+                &HttpRequest {
+                    id: "rq_list".into(),
+                    workspace_id: workspace_id.into(),
+                    folder_id: Some("fl_admin".into()),
+                    name: "List".into(),
+                    method: "GET".into(),
+                    url: "${[ baseUrl ]}/users".into(),
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            db.upsert_http_request(
+                &HttpRequest {
+                    id: "rq_fn".into(),
+                    workspace_id: workspace_id.into(),
+                    folder_id: Some("fl_users".into()),
+                    name: "Random id".into(),
+                    method: "GET".into(),
+                    url: "https://example.com/${[ uuid() ]}".into(),
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            db.upsert_grpc_request(
+                &GrpcRequest {
+                    id: "gr_users".into(),
+                    workspace_id: workspace_id.into(),
+                    folder_id: Some("fl_users".into()),
+                    name: "UserService".into(),
+                    url: "https://example.com".into(),
+                    ..Default::default()
+                },
+                &UpdateSource::Sync,
+            )?;
+            Ok::<_, yaak_models::error::Error>(())
+        })
+        .expect("seed folder export tree");
 }
 
 #[test]
@@ -324,4 +328,159 @@ fn export_folder_writes_openapi_with_folder_tags() {
     assert_eq!(exported["servers"][0]["url"], "{baseUrl}");
     assert_eq!(exported["paths"]["/users/{id}"]["get"]["tags"][0], "Users");
     assert_eq!(exported["paths"]["/users"]["get"]["tags"][0], "Users / Admin");
+}
+
+fn write_linked_fixture(path: &std::path::Path, requests: &[(&str, &str, &str)]) {
+    let requests = requests
+        .iter()
+        .map(|(id, name, url)| {
+            format!(
+                r#"{{ "model": "http_request", "id": "{id}", "workspaceId": "wrk_link",
+                     "name": "{name}", "method": "GET", "url": "{url}" }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    std::fs::write(
+        path,
+        format!(
+            r#"{{
+  "yaakVersion": "test",
+  "yaakSchema": 4,
+  "resources": {{
+    "workspaces": [{{ "model": "workspace", "id": "wrk_link", "name": "Linked Workspace" }}],
+    "httpRequests": [{requests}]
+  }}
+}}"#
+        ),
+    )
+    .expect("write linked fixture");
+}
+
+#[test]
+fn re_import_merges_into_linked_workspace() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let data_dir = temp_dir.path();
+    let import_path = temp_dir.path().join("linked.json");
+
+    write_linked_fixture(
+        &import_path,
+        &[
+            ("req_a", "Request A", "https://example.com/a"),
+            ("req_b", "Request B", "https://example.com/b"),
+        ],
+    );
+    cli_cmd(data_dir)
+        .args([
+            "import",
+            import_path.to_str().expect("import path is utf-8"),
+        ])
+        .assert()
+        .success()
+        .stdout(contains("Imported 1 workspace, 2 HTTP requests"));
+
+    let workspace_id = {
+        let query_manager = query_manager(data_dir);
+        let db = query_manager.connect();
+        db.list_workspaces()
+            .expect("list workspaces")
+            .into_iter()
+            .find(|w| w.name == "Linked Workspace")
+            .expect("workspace imported")
+            .id
+    };
+
+    // The source doc changes A, drops B, and adds C. The default selection applies the
+    // update and the create but leaves the removal as an offer.
+    write_linked_fixture(
+        &import_path,
+        &[
+            ("req_a", "Request A", "https://example.com/a-v2"),
+            ("req_c", "Request C", "https://example.com/c"),
+        ],
+    );
+    cli_cmd(data_dir)
+        .args([
+            "import",
+            import_path.to_str().expect("import path is utf-8"),
+            "--workspace-id",
+            &workspace_id,
+        ])
+        .assert()
+        .success()
+        .stdout(contains("Imported 2 HTTP requests"))
+        .stdout(contains("Skipped 1 removed from source"));
+
+    let query_manager = query_manager(data_dir);
+    let db = query_manager.connect();
+    let requests = db.list_http_requests(&workspace_id).expect("list requests");
+    assert_eq!(requests.len(), 3, "merge must not duplicate: {requests:?}");
+    assert_eq!(
+        requests.iter().find(|r| r.name == "Request A").expect("request A").url,
+        "https://example.com/a-v2"
+    );
+    assert!(requests.iter().any(|r| r.name == "Request B"), "removal must not auto-apply");
+    assert!(requests.iter().any(|r| r.name == "Request C"));
+}
+
+#[test]
+fn re_import_leaves_deleted_resources_alone() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let data_dir = temp_dir.path();
+    let import_path = temp_dir.path().join("linked.json");
+
+    write_linked_fixture(
+        &import_path,
+        &[
+            ("req_a", "Request A", "https://example.com/a"),
+            ("req_b", "Request B", "https://example.com/b"),
+        ],
+    );
+    cli_cmd(data_dir)
+        .args([
+            "import",
+            import_path.to_str().expect("import path is utf-8"),
+        ])
+        .assert()
+        .success();
+
+    let workspace_id = {
+        let query_manager = query_manager(data_dir);
+        let db = query_manager.connect();
+        let workspace_id = db
+            .list_workspaces()
+            .expect("list workspaces")
+            .into_iter()
+            .find(|w| w.name == "Linked Workspace")
+            .expect("workspace imported")
+            .id;
+        let request_b = db
+            .list_http_requests(&workspace_id)
+            .expect("list requests")
+            .into_iter()
+            .find(|r| r.name == "Request B")
+            .expect("request B imported");
+        drop(db);
+        query_manager
+            .with_tx(|tx| tx.delete_http_request_by_id(&request_b.id, &UpdateSource::Sync))
+            .expect("delete request B");
+        workspace_id
+    };
+
+    cli_cmd(data_dir)
+        .args([
+            "import",
+            import_path.to_str().expect("import path is utf-8"),
+            "--workspace-id",
+            &workspace_id,
+        ])
+        .assert()
+        .success()
+        .stdout(contains("Skipped 1 ignored"));
+
+    let query_manager = query_manager(data_dir);
+    let requests =
+        query_manager.connect().list_http_requests(&workspace_id).expect("list requests");
+    assert_eq!(requests.len(), 1, "a deleted request must not come back: {requests:?}");
+    assert_eq!(requests[0].name, "Request A");
 }

@@ -11,6 +11,7 @@ import {
   DEFAULT_LOCALHOST_PORT,
   stopActiveServer,
 } from "./callbackServer";
+import { readCustomParams } from "./customParams";
 import {
   type CallbackType,
   DEFAULT_PKCE_METHOD,
@@ -103,6 +104,7 @@ export const plugin: PluginDefinition = {
             authorizationUrl: stringArg(values, "authorizationUrl"),
             accessTokenUrl: stringArg(values, "accessTokenUrl"),
             clientId: stringArg(values, "clientId"),
+            username: usernameArg(values),
           };
           const token = await getToken(ctx, tokenArgs);
           if (token == null) {
@@ -128,6 +130,7 @@ export const plugin: PluginDefinition = {
             authorizationUrl: stringArg(values, "authorizationUrl"),
             accessTokenUrl: stringArg(values, "accessTokenUrl"),
             clientId: stringArg(values, "clientId"),
+            username: usernameArg(values),
           };
           if (await deleteToken(ctx, tokenArgs)) {
             await ctx.toast.show({
@@ -466,6 +469,48 @@ export const plugin: PluginDefinition = {
                 values.clientCredentialsMethod === "client_assertion",
             }),
           },
+          {
+            type: "key_value",
+            name: "authorizationParams",
+            label: "Authorization Params",
+            description: "Query params appended to the authorization URL.",
+            optional: true,
+            dynamic: hiddenIfNot(["authorization_code", "implicit"]),
+          },
+          {
+            type: "key_value",
+            name: "tokenHeaders",
+            label: "Token Headers",
+            description:
+              "Headers sent with the token request, and when refreshing unless overridden.",
+            optional: true,
+            dynamic: hiddenIfNot(["authorization_code", "password", "client_credentials"]),
+          },
+          {
+            type: "key_value",
+            name: "tokenBodyParams",
+            label: "Token Body Params",
+            description:
+              "Form params sent with the token request, and when refreshing unless overridden.",
+            optional: true,
+            dynamic: hiddenIfNot(["authorization_code", "password", "client_credentials"]),
+          },
+          {
+            type: "key_value",
+            name: "refreshHeaders",
+            label: "Refresh Headers",
+            description: "Headers sent only when refreshing the token.",
+            optional: true,
+            dynamic: hiddenIfNot(["authorization_code", "password"]),
+          },
+          {
+            type: "key_value",
+            name: "refreshBodyParams",
+            label: "Refresh Body Params",
+            description: "Form params sent only when refreshing the token.",
+            optional: true,
+            dynamic: hiddenIfNot(["authorization_code", "password"]),
+          },
         ],
       },
       {
@@ -478,6 +523,7 @@ export const plugin: PluginDefinition = {
             authorizationUrl: stringArg(values, "authorizationUrl"),
             accessTokenUrl: stringArg(values, "accessTokenUrl"),
             clientId: stringArg(values, "clientId"),
+            username: usernameArg(values),
           };
           const token = await getToken(ctx, tokenArgs);
           if (token == null) {
@@ -503,6 +549,7 @@ export const plugin: PluginDefinition = {
       const headerPrefix = stringArg(values, "headerPrefix");
       const grantType = stringArg(values, "grantType") as GrantType;
       const credentialsInBody = values.credentials === "body";
+      const customParams = readCustomParams(values);
       const tokenName = values.tokenName === "id_token" ? "id_token" : "access_token";
 
       // Build external browser options if enabled
@@ -543,6 +590,7 @@ export const plugin: PluginDefinition = {
             : null,
           tokenName: tokenName,
           externalBrowser: externalBrowserOptions,
+          customParams,
         });
       } else if (grantType === "implicit") {
         const authorizationUrl = stringArg(values, "authorizationUrl");
@@ -558,6 +606,7 @@ export const plugin: PluginDefinition = {
           state: stringArgOrNull(values, "state"),
           tokenName: tokenName,
           externalBrowser: externalBrowserOptions,
+          customParams,
         });
       } else if (grantType === "client_credentials") {
         const accessTokenUrl = stringArg(values, "accessTokenUrl");
@@ -574,6 +623,7 @@ export const plugin: PluginDefinition = {
           scope: stringArgOrNull(values, "scope"),
           audience: stringArgOrNull(values, "audience"),
           credentialsInBody,
+          customParams,
         });
       } else if (grantType === "password") {
         const accessTokenUrl = stringArg(values, "accessTokenUrl");
@@ -588,6 +638,7 @@ export const plugin: PluginDefinition = {
           scope: stringArgOrNull(values, "scope"),
           audience: stringArgOrNull(values, "audience"),
           credentialsInBody,
+          customParams,
         });
       } else {
         throw new Error(`Invalid grant type ${String(grantType)}`);
@@ -607,6 +658,12 @@ function stringArgOrNull(
   const arg = values[name];
   if (arg == null || arg === "") return null;
   return `${arg}`;
+}
+
+/** Only the password grant stores its token under a username, so the others must not key by one */
+function usernameArg(values: Record<string, JsonPrimitive | undefined>): string | null {
+  const grantType = String(values.grantType ?? defaultGrantType);
+  return grantType === "password" ? stringArgOrNull(values, "username") : null;
 }
 
 function stringArg(values: Record<string, JsonPrimitive | undefined>, name: string): string {

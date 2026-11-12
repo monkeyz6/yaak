@@ -10,7 +10,6 @@ function response(
     createdAt: "",
     updatedAt: "",
     workspaceId: "ws_1",
-    bodyPath: null,
     contentLength: null,
     contentLengthCompressed: null,
     elapsed: 0,

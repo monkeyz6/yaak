@@ -1,10 +1,11 @@
 use crate::blob_manager::BlobManager;
-use crate::client_db::ClientDb;
+use crate::client_db::{ClientDb, WriteDb};
 use crate::error::{Error, Result};
 use crate::models::{HttpResponse, HttpResponseIden, HttpResponseState};
 use crate::queries::MAX_HISTORY_ITEMS;
 use crate::util::UpdateSource;
 use log::{debug, error};
+use sea_query::ExprTrait;
 use sea_query::{Expr, Query, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 use std::collections::HashSet;
@@ -31,18 +32,34 @@ impl<'a> ClientDb<'a> {
         self.find_many(HttpResponseIden::WorkspaceId, workspace_id, limit)
     }
 
-    /// Returns the number of responses deleted.
-    pub fn delete_all_http_responses_for_request(
-        &self,
-        request_id: &str,
-        source: &UpdateSource,
-    ) -> Result<usize> {
-        let responses = self.list_http_responses_for_request(request_id, None)?;
-        let count = responses.len();
-        for m in responses {
-            self.delete(&m, source)?;
-        }
-        Ok(count)
+    /// Delete blob-stored response bodies whose owning HTTP response row no
+    /// longer exists. Blob ids are keyed by the response that owns them —
+    /// "{response_id}" for a response body, "{response_id}.request" for the
+    /// request that produced it — so ownership is the id's first segment.
+    ///
+    /// The blob half of [`Self::delete_orphaned_response_bodies`], on its own
+    /// for hosts with no filesystem to hold body files. See `crate::hooks`.
+    ///
+    /// Returns the number of orphaned bodies deleted.
+    pub fn delete_orphaned_response_body_blobs(&self, blobs: &BlobManager) -> Result<usize> {
+        let orphaned = blobs
+            .connect()
+            .list_body_ids()?
+            .into_iter()
+            .filter(|body_id| {
+                let response_id = body_id.split('.').next().unwrap_or_default();
+                self.find_optional::<HttpResponse>(HttpResponseIden::Id, response_id).is_none()
+            })
+            .collect::<Vec<_>>();
+
+        blobs.with_tx(|b| {
+            for body_id in &orphaned {
+                b.delete_chunks(body_id)?;
+            }
+            Ok::<_, crate::error::Error>(())
+        })?;
+
+        Ok(orphaned.len())
     }
 
     /// Delete response body data (blob chunks and body files) whose owning HTTP
@@ -59,18 +76,7 @@ impl<'a> ClientDb<'a> {
         blobs: &BlobManager,
         responses_dir: &std::path::Path,
     ) -> Result<usize> {
-        let mut deleted = 0;
-
-        // Blob chunks are keyed "{response_id}.request"
-        let blob_ctx = blobs.connect();
-        for body_id in blob_ctx.list_body_ids()? {
-            let response_id = body_id.split('.').next().unwrap_or_default();
-            if self.find_optional::<HttpResponse>(HttpResponseIden::Id, response_id).is_some() {
-                continue;
-            }
-            blob_ctx.delete_chunks(&body_id)?;
-            deleted += 1;
-        }
+        let mut deleted = self.delete_orphaned_response_body_blobs(blobs)?;
 
         // Body files are stored as {responses_dir}/{response_id}
         if let Ok(entries) = fs::read_dir(responses_dir) {
@@ -82,8 +88,7 @@ impl<'a> ClientDb<'a> {
                 let Some(response_id) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if self.find_optional::<HttpResponse>(HttpResponseIden::Id, response_id).is_some()
-                {
+                if self.find_optional::<HttpResponse>(HttpResponseIden::Id, response_id).is_some() {
                     continue;
                 }
                 if fs::remove_file(&path).is_ok() {
@@ -93,6 +98,22 @@ impl<'a> ClientDb<'a> {
         }
 
         Ok(deleted)
+    }
+}
+
+impl<'a> WriteDb<'a> {
+    /// Returns the number of responses deleted.
+    pub fn delete_all_http_responses_for_request(
+        &self,
+        request_id: &str,
+        source: &UpdateSource,
+    ) -> Result<usize> {
+        let responses = self.list_http_responses_for_request(request_id, None)?;
+        let count = responses.len();
+        for m in responses {
+            self.delete(&m, source)?;
+        }
+        Ok(count)
     }
 
     /// Keep the given HTTP responses and delete the rest in this workspace.
@@ -168,9 +189,8 @@ impl<'a> ClientDb<'a> {
         }
 
         // Delete request body blobs (pattern: {response_id}.request)
-        let blob_ctx = blob_manager.connect();
         let body_id = format!("{}.request", http_response.id);
-        if let Err(e) = blob_ctx.delete_chunks(&body_id) {
+        if let Err(e) = blob_manager.with_tx(|b| b.delete_chunks(&body_id)) {
             error!("Failed to delete request body blobs: {}", e);
         }
 
@@ -216,36 +236,43 @@ impl<'a> ClientDb<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::blob_manager::BodyChunk;
+    use crate::blob_manager::{BlobManager, BodyChunk};
+    use crate::error::Error;
     use crate::init_in_memory;
+    use crate::client_db::WriteDb;
     use crate::models::{HttpRequest, HttpResponse, HttpResponseState, Workspace};
+    use crate::query_manager::QueryManager;
     use crate::util::UpdateSource;
 
-    fn setup_workspace() -> (
-        crate::query_manager::QueryManager,
-        crate::blob_manager::BlobManager,
-        std::sync::mpsc::Receiver<crate::util::ModelPayload>,
-        Workspace,
-        UpdateSource,
-    ) {
+    fn setup_workspace() -> (QueryManager, BlobManager, std::sync::mpsc::Receiver<crate::util::ModelPayload>, Workspace, UpdateSource) {
         let (query_manager, blob_manager, rx) = init_in_memory().expect("Failed to init DB");
-        let db = query_manager.connect();
         let source = UpdateSource::Background;
-        let workspace = db
-            .upsert_workspace(
-                &Workspace { name: "Prune Test".to_string(), ..Default::default() },
-                &source,
-            )
+        let workspace = query_manager
+            .with_tx(|db| {
+                db.upsert_workspace(
+                    &Workspace { name: "Prune Test".to_string(), ..Default::default() },
+                    &source,
+                )
+            })
             .expect("Failed to upsert workspace");
-        drop(db);
         (query_manager, blob_manager, rx, workspace, source)
     }
 
+    /// Run a test body inside one write transaction.
+    fn in_tx(query_manager: &QueryManager, f: impl FnOnce(&WriteDb)) {
+        query_manager
+            .with_tx(|db| {
+                f(db);
+                Ok::<_, Error>(())
+            })
+            .expect("Failed to run transaction");
+    }
+
     fn insert_closed_response(
-        db: &crate::client_db::ClientDb,
+        db: &WriteDb,
         workspace_id: &str,
         request_id: &str,
-        blob_manager: &crate::blob_manager::BlobManager,
+        blob_manager: &BlobManager,
         source: &UpdateSource,
     ) -> HttpResponse {
         db.upsert_http_response(
@@ -261,49 +288,92 @@ mod tests {
         .expect("Failed to upsert response")
     }
 
+    /// A workspace, a request, and one response that still exists.
+    fn seed_live_response(
+        query_manager: &QueryManager,
+        blob_manager: &BlobManager,
+    ) -> HttpResponse {
+        let source = &UpdateSource::Background;
+        query_manager
+            .with_tx(|db| {
+                let workspace = db.upsert_workspace(
+                    &Workspace { name: "GC Test".to_string(), ..Default::default() },
+                    source,
+                )?;
+                let request = db.upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    source,
+                )?;
+                db.upsert_http_response(
+                    &HttpResponse {
+                        request_id: request.id.clone(),
+                        workspace_id: workspace.id.clone(),
+                        ..Default::default()
+                    },
+                    source,
+                    blob_manager,
+                )
+            })
+            .expect("Failed to seed response")
+    }
+
+    fn insert_bodies(blob_manager: &BlobManager, body_ids: &[&str]) {
+        blob_manager
+            .with_tx(|b| {
+                for id in body_ids {
+                    b.insert_chunk(&BodyChunk::new(*id, 0, b"data".to_vec()))?;
+                }
+                Ok::<_, Error>(())
+            })
+            .expect("Failed to insert chunks");
+    }
+
+    /// What a browser host runs: no filesystem, so bodies exist only as blob
+    /// chunks, under both id shapes the blob DB uses.
+    #[test]
+    fn deletes_orphaned_response_body_blobs() {
+        let (query_manager, blob_manager, _rx) = init_in_memory().expect("Failed to init DB");
+
+        let live = seed_live_response(&query_manager, &blob_manager);
+        let live_request_body_id = format!("{}.request", live.id);
+        insert_bodies(
+            &blob_manager,
+            &[
+                &live.id,
+                &live_request_body_id,
+                "rs_gone",
+                "rs_gone.request",
+            ],
+        );
+
+        let deleted = query_manager
+            .connect()
+            .delete_orphaned_response_body_blobs(&blob_manager)
+            .expect("Failed to GC response body blobs");
+        assert_eq!(deleted, 2);
+
+        let blob_ctx = blob_manager.connect();
+        assert!(blob_ctx.body_exists(&live.id).unwrap());
+        assert!(blob_ctx.body_exists(&live_request_body_id).unwrap());
+        assert!(!blob_ctx.body_exists("rs_gone").unwrap());
+        assert!(!blob_ctx.body_exists("rs_gone.request").unwrap());
+    }
+
     #[test]
     fn deletes_orphaned_response_bodies() {
         let (query_manager, blob_manager, _rx) = init_in_memory().expect("Failed to init DB");
-        let db = query_manager.connect();
 
-        let source = &UpdateSource::Background;
-        let workspace = db
-            .upsert_workspace(&Workspace { name: "GC Test".to_string(), ..Default::default() }, source)
-            .expect("Failed to upsert workspace");
-        let request = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                source,
-            )
-            .expect("Failed to upsert request");
-
-        let live = db
-            .upsert_http_response(
-                &HttpResponse {
-                    request_id: request.id.clone(),
-                    workspace_id: workspace.id.clone(),
-                    ..Default::default()
-                },
-                source,
-                &blob_manager,
-            )
-            .expect("Failed to upsert response");
-
+        let live = seed_live_response(&query_manager, &blob_manager);
         let live_body_id = format!("{}.request", live.id);
-        {
-            // Scope the connection: the in-memory pool only has one, and the GC
-            // needs to take it
-            let blob_ctx = blob_manager.connect();
-            blob_ctx.insert_chunk(&BodyChunk::new(&live_body_id, 0, b"live".to_vec())).unwrap();
-            blob_ctx.insert_chunk(&BodyChunk::new("rs_gone.request", 0, b"dead".to_vec())).unwrap();
-        }
+        insert_bodies(&blob_manager, &[&live_body_id, "rs_gone.request"]);
 
         let dir = std::env::temp_dir().join(format!("yaak-blob-gc-test-{}", live.id));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(&live.id), b"live").unwrap();
         std::fs::write(dir.join("rs_gone"), b"dead").unwrap();
 
-        let deleted = db
+        let deleted = query_manager
+            .connect()
             .delete_orphaned_response_bodies(&blob_manager, &dir)
             .expect("Failed to GC response bodies");
         assert_eq!(deleted, 2);
@@ -321,138 +391,143 @@ mod tests {
     #[test]
     fn prunes_to_keep_ids_per_request() {
         let (query_manager, blob_manager, _rx, workspace, source) = setup_workspace();
-        let db = query_manager.connect();
-        let request_a = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                &source,
-            )
-            .unwrap();
-        let request_b = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                &source,
-            )
-            .unwrap();
+        in_tx(&query_manager, |db| {
+            let request_a = db
+                .upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    &source,
+                )
+                .unwrap();
+            let request_b = db
+                .upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    &source,
+                )
+                .unwrap();
 
-        let a1 = insert_closed_response(&db, &workspace.id, &request_a.id, &blob_manager, &source);
-        let a2 = insert_closed_response(&db, &workspace.id, &request_a.id, &blob_manager, &source);
-        let b1 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
-        let _b2 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
-        let _b3 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
+            let a1 = insert_closed_response(&db, &workspace.id, &request_a.id, &blob_manager, &source);
+            let a2 = insert_closed_response(&db, &workspace.id, &request_a.id, &blob_manager, &source);
+            let b1 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
+            let _b2 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
+            let _b3 = insert_closed_response(&db, &workspace.id, &request_b.id, &blob_manager, &source);
 
-        let deleted = db
-            .prune_http_responses_for_workspace(
-                &workspace.id,
-                &[a2.id.clone(), b1.id.clone()],
-                &source,
-                &blob_manager,
-            )
-            .expect("Failed to prune");
-        assert_eq!(deleted, 3);
+            let deleted = db
+                .prune_http_responses_for_workspace(
+                    &workspace.id,
+                    &[a2.id.clone(), b1.id.clone()],
+                    &source,
+                    &blob_manager,
+                )
+                .expect("Failed to prune");
+            assert_eq!(deleted, 3);
 
-        let remaining: Vec<String> = db
-            .list_http_responses(&workspace.id, None)
-            .unwrap()
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(remaining.len(), 2);
-        assert!(remaining.contains(&a2.id));
-        assert!(remaining.contains(&b1.id));
-        assert!(!remaining.contains(&a1.id));
+            let remaining: Vec<String> = db
+                .list_http_responses(&workspace.id, None)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
+            assert_eq!(remaining.len(), 2);
+            assert!(remaining.contains(&a2.id));
+            assert!(remaining.contains(&b1.id));
+            assert!(!remaining.contains(&a1.id));
+        });
     }
 
     #[test]
     fn prune_does_not_delete_in_flight_responses() {
         let (query_manager, blob_manager, _rx, workspace, source) = setup_workspace();
-        let db = query_manager.connect();
-        let request = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                &source,
-            )
-            .unwrap();
-        let closed = insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
-        let in_flight = db
-            .upsert_http_response(
-                &HttpResponse {
-                    request_id: request.id.clone(),
-                    workspace_id: workspace.id.clone(),
-                    state: HttpResponseState::Initialized,
-                    ..Default::default()
-                },
-                &source,
-                &blob_manager,
-            )
-            .unwrap();
+        in_tx(&query_manager, |db| {
+            let request = db
+                .upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    &source,
+                )
+                .unwrap();
+            let closed = insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
+            let in_flight = db
+                .upsert_http_response(
+                    &HttpResponse {
+                        request_id: request.id.clone(),
+                        workspace_id: workspace.id.clone(),
+                        state: HttpResponseState::Initialized,
+                        ..Default::default()
+                    },
+                    &source,
+                    &blob_manager,
+                )
+                .unwrap();
 
-        let deleted = db
-            .prune_http_responses_for_workspace(
-                &workspace.id,
-                &[closed.id.clone()],
-                &source,
-                &blob_manager,
-            )
-            .expect("Failed to prune");
-        assert_eq!(deleted, 0);
+            let deleted = db
+                .prune_http_responses_for_workspace(
+                    &workspace.id,
+                    &[closed.id.clone()],
+                    &source,
+                    &blob_manager,
+                )
+                .expect("Failed to prune");
+            assert_eq!(deleted, 0);
 
-        let remaining = db.list_http_responses_for_request(&request.id, None).unwrap();
-        assert_eq!(remaining.len(), 2);
-        assert!(remaining.iter().any(|r| r.id == closed.id));
-        assert!(remaining.iter().any(|r| r.id == in_flight.id));
+            let remaining = db.list_http_responses_for_request(&request.id, None).unwrap();
+            assert_eq!(remaining.len(), 2);
+            assert!(remaining.iter().any(|r| r.id == closed.id));
+            assert!(remaining.iter().any(|r| r.id == in_flight.id));
+        });
     }
 
     #[test]
     fn prune_rejects_empty_keep_ids_when_responses_exist() {
         let (query_manager, blob_manager, _rx, workspace, source) = setup_workspace();
-        let db = query_manager.connect();
-        let request = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                &source,
-            )
-            .unwrap();
-        insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
+        in_tx(&query_manager, |db| {
+            let request = db
+                .upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    &source,
+                )
+                .unwrap();
+            insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
 
-        let err = db
-            .prune_http_responses_for_workspace(&workspace.id, &[], &source, &blob_manager)
-            .expect_err("empty keep_ids must not wipe the workspace");
-        assert!(err.to_string().contains("keep_ids"));
-        assert_eq!(db.list_http_responses(&workspace.id, None).unwrap().len(), 1);
+            let err = db
+                .prune_http_responses_for_workspace(&workspace.id, &[], &source, &blob_manager)
+                .expect_err("empty keep_ids must not wipe the workspace");
+            assert!(err.to_string().contains("keep_ids"));
+            assert_eq!(db.list_http_responses(&workspace.id, None).unwrap().len(), 1);
+        });
     }
 
     #[test]
     fn prune_rejects_keep_ids_outside_workspace() {
         let (query_manager, blob_manager, _rx, workspace, source) = setup_workspace();
-        let db = query_manager.connect();
-        let request = db
-            .upsert_http_request(
-                &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
-                &source,
-            )
-            .unwrap();
-        insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
+        in_tx(&query_manager, |db| {
+            let request = db
+                .upsert_http_request(
+                    &HttpRequest { workspace_id: workspace.id.clone(), ..Default::default() },
+                    &source,
+                )
+                .unwrap();
+            insert_closed_response(&db, &workspace.id, &request.id, &blob_manager, &source);
 
-        let err = db
-            .prune_http_responses_for_workspace(
-                &workspace.id,
-                &["rs_other".to_string()],
-                &source,
-                &blob_manager,
-            )
-            .expect_err("foreign keep_ids must not wipe the workspace");
-        assert!(err.to_string().contains("keep_ids"));
-        assert_eq!(db.list_http_responses(&workspace.id, None).unwrap().len(), 1);
+            let err = db
+                .prune_http_responses_for_workspace(
+                    &workspace.id,
+                    &["rs_other".to_string()],
+                    &source,
+                    &blob_manager,
+                )
+                .expect_err("foreign keep_ids must not wipe the workspace");
+            assert!(err.to_string().contains("keep_ids"));
+            assert_eq!(db.list_http_responses(&workspace.id, None).unwrap().len(), 1);
+        });
     }
 
     #[test]
     fn prune_empty_workspace_is_noop() {
         let (query_manager, blob_manager, _rx, workspace, source) = setup_workspace();
-        let db = query_manager.connect();
-        let deleted = db
-            .prune_http_responses_for_workspace(&workspace.id, &[], &source, &blob_manager)
-            .expect("empty workspace should no-op");
-        assert_eq!(deleted, 0);
+        in_tx(&query_manager, |db| {
+            let deleted = db
+                .prune_http_responses_for_workspace(&workspace.id, &[], &source, &blob_manager)
+                .expect("empty workspace should no-op");
+            assert_eq!(deleted, 0);
+        });
     }
 }

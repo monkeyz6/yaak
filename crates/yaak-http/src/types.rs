@@ -78,8 +78,19 @@ impl SendableHttpRequest {
     }
 
     pub fn insert_header(&mut self, header: (String, String)) {
+        if header.0.eq_ignore_ascii_case("cookie") {
+            if let Some(existing) =
+                self.headers.iter_mut().find(|h| h.0.eq_ignore_ascii_case("cookie"))
+            {
+                existing.1 = format!("{}; {}", existing.1, header.1);
+            } else {
+                self.headers.push(header);
+            }
+            return;
+        }
+
         if let Some(existing) =
-            self.headers.iter_mut().find(|h| h.0.to_lowercase() == header.0.to_lowercase())
+            self.headers.iter_mut().find(|h| h.0.eq_ignore_ascii_case(&header.0))
         {
             existing.1 = header.1;
         } else {
@@ -170,7 +181,11 @@ fn strip_query_params(url: &str, names: &[&str]) -> String {
 }
 
 fn build_url(r: &HttpRequest) -> String {
-    let (url_string, params) = apply_path_placeholders(&ensure_proto(&r.url), &r.url_parameters);
+    // Trim stray whitespace: a leading space breaks scheme
+    // detection in `ensure_proto` (IdnaError); a trailing space becomes `/path%20` -> 404.
+    let trimmed_url = r.url.trim();
+    let (url_string, params) =
+        apply_path_placeholders(&ensure_proto(trimmed_url), &r.url_parameters);
     let mut url = append_query_params(
         &url_string,
         params
@@ -205,16 +220,23 @@ fn append_graphql_query_params(url: &str, body: &BTreeMap<String, serde_json::Va
 }
 
 fn build_headers(r: &HttpRequest) -> Vec<(String, String)> {
-    r.headers
-        .iter()
-        .filter_map(|h| {
-            if h.enabled && !h.name.is_empty() {
-                Some((h.name.clone(), h.value.clone()))
-            } else {
-                None
+    // RFC 6265 allows only one Cookie field, so enabled Cookie rows fold into
+    // the first one
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for h in &r.headers {
+        if !h.enabled || h.name.is_empty() {
+            continue;
+        }
+        if h.name.eq_ignore_ascii_case("cookie") {
+            if let Some(existing) = headers.iter_mut().find(|e| e.0.eq_ignore_ascii_case("cookie"))
+            {
+                existing.1 = format!("{}; {}", existing.1, h.value);
+                continue;
             }
-        })
-        .collect()
+        }
+        headers.push((h.name.clone(), h.value.clone()));
+    }
+    headers
 }
 
 async fn build_body(
@@ -494,7 +516,114 @@ mod tests {
     use bytes::Bytes;
     use serde_json::json;
     use std::collections::BTreeMap;
-    use yaak_models::models::{HttpRequest, HttpUrlParameter};
+    use yaak_models::models::{HttpRequest, HttpRequestHeader, HttpUrlParameter};
+
+    #[tokio::test]
+    async fn test_sendable_request_preserves_independent_cookie_enabled_states() {
+        let request = HttpRequest {
+            url: "https://example.com/api".to_string(),
+            headers: vec![
+                HttpRequestHeader {
+                    enabled: true,
+                    name: "Cookie".to_string(),
+                    value: "session=abc".to_string(),
+                    id: None,
+                },
+                HttpRequestHeader {
+                    enabled: false,
+                    name: "Cookie".to_string(),
+                    value: "debug=verbose".to_string(),
+                    id: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let sendable =
+            SendableHttpRequest::from_http_request(&request, SendableHttpRequestOptions::default())
+                .await
+                .unwrap();
+
+        assert_eq!(sendable.headers, vec![("Cookie".to_string(), "session=abc".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_sendable_request_merges_enabled_cookie_rows_into_one_field() {
+        let request = HttpRequest {
+            url: "https://example.com/api".to_string(),
+            headers: vec![
+                HttpRequestHeader {
+                    enabled: true,
+                    name: "Cookie".to_string(),
+                    value: "session=abc".to_string(),
+                    id: None,
+                },
+                HttpRequestHeader {
+                    enabled: false,
+                    name: "Cookie".to_string(),
+                    value: "debug=verbose".to_string(),
+                    id: None,
+                },
+                HttpRequestHeader {
+                    enabled: true,
+                    name: "cookie".to_string(),
+                    value: "theme=dark".to_string(),
+                    id: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let sendable =
+            SendableHttpRequest::from_http_request(&request, SendableHttpRequestOptions::default())
+                .await
+                .unwrap();
+
+        assert_eq!(
+            sendable.headers,
+            vec![("Cookie".to_string(), "session=abc; theme=dark".to_string())],
+        );
+    }
+
+    #[test]
+    fn test_insert_header_appends_authentication_cookie() {
+        let mut request = SendableHttpRequest {
+            headers: vec![
+                ("Cookie".to_string(), "session=abc".to_string()),
+                ("Cookie".to_string(), "theme=dark".to_string()),
+            ],
+            ..Default::default()
+        };
+
+        request.insert_header(("cookie".to_string(), "api_key=secret".to_string()));
+
+        assert_eq!(
+            request.headers,
+            vec![
+                ("Cookie".to_string(), "session=abc; api_key=secret".to_string()),
+                ("Cookie".to_string(), "theme=dark".to_string()),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sendable_request_preserves_serialized_path_delimiters() {
+        let request = HttpRequest {
+            url: "https://example.com/labels/.one%2Ftwo.three/matrix/;x=1%3Bspoof%3D2;y=2"
+                .to_string(),
+            ..Default::default()
+        };
+
+        let sendable =
+            SendableHttpRequest::from_http_request(&request, SendableHttpRequestOptions::default())
+                .await
+                .unwrap();
+
+        assert_eq!(
+            sendable.url,
+            "https://example.com/labels/.one%2Ftwo.three/matrix/;x=1%3Bspoof%3D2;y=2",
+        );
+    }
 
     #[test]
     fn test_build_url_no_params() {
@@ -690,6 +819,64 @@ mod tests {
 
         let result = build_url(&r);
         assert_eq!(result, "https://example.com/api?foo=bar#section");
+    }
+
+    #[test]
+    fn test_build_url_trims_leading_whitespace() {
+        // A leading space must not break scheme detection (it used to produce
+        // `http:// https://...`, which fails to parse with an IdnaError).
+        let r = HttpRequest {
+            url: " https://example.com/api".to_string(),
+            url_parameters: vec![],
+            ..Default::default()
+        };
+
+        let result = build_url(&r);
+        assert_eq!(result, "https://example.com/api");
+    }
+
+    #[test]
+    fn test_build_url_trims_trailing_whitespace() {
+        let r = HttpRequest {
+            url: "https://example.com/api ".to_string(),
+            url_parameters: vec![],
+            ..Default::default()
+        };
+
+        let result = build_url(&r);
+        assert_eq!(result, "https://example.com/api");
+    }
+
+    #[test]
+    fn test_build_url_trims_whitespace_with_params() {
+        // A trailing space must not end up percent-encoded in the path once query
+        // parameters are appended (e.g. `/api%20?foo=bar`, which 404s).
+        let r = HttpRequest {
+            url: " https://example.com/api ".to_string(),
+            url_parameters: vec![HttpUrlParameter {
+                enabled: true,
+                name: "foo".to_string(),
+                value: "bar".to_string(),
+                id: None,
+            }],
+            ..Default::default()
+        };
+
+        let result = build_url(&r);
+        assert_eq!(result, "https://example.com/api?foo=bar");
+    }
+
+    #[test]
+    fn test_build_url_trims_whitespace_without_scheme() {
+        let r = HttpRequest {
+            url: "  example.com/api\t".to_string(),
+            url_parameters: vec![],
+            ..Default::default()
+        };
+
+        let result = build_url(&r);
+        // ensure_proto defaults to http:// for regular domains
+        assert_eq!(result, "http://example.com/api");
     }
 
     #[test]

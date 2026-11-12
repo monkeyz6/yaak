@@ -1,12 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { checkLicense } from "@yaakapp-internal/license";
 import { useTranslation } from "@yaakapp-internal/i18n";
-import type { LicenseCheckStatus } from "@yaakapp-internal/license";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useKeyValue } from "../hooks/useKeyValue";
 import { appInfo } from "../lib/appInfo";
 import { pricingUrl } from "../lib/pricingUrl";
 import { DismissibleBanner } from "./core/DismissibleBanner";
+import { platform } from "@yaakapp-internal/platform";
 
 const COMMERCIAL_USE_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -87,7 +86,7 @@ async function shouldShowCommercialUsePrompt(): Promise<boolean> {
   }
 
   try {
-    const license = await invoke<LicenseCheckStatus>("plugin:yaak-license|check");
+    const license = await checkLicense();
     return license.status === "personal_use";
   } catch (err) {
     console.log("Failed to check license before commercial-use prompt", err);
@@ -96,7 +95,7 @@ async function shouldShowCommercialUsePrompt(): Promise<boolean> {
 }
 
 async function openCommercialUsePricing(source: string): Promise<void> {
-  await openUrl(pricingUrl(`app.commercial-use.${source}`)).catch(console.error);
+  await platform.openUrl(pricingUrl(`app.commercial-use.${source}`)).catch(console.error);
 }
 
 function isSnoozed(value: string | null, ms: number): boolean {

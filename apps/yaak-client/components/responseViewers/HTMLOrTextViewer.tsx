@@ -1,9 +1,11 @@
-import { i18n, useTranslation } from "@yaakapp-internal/i18n";
 import type { HttpResponse, PostResponseAction } from "@yaakapp-internal/models";
 import { getModel, patchModelById } from "@yaakapp-internal/models";
-import { useCallback, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { i18n, useTranslation } from "@yaakapp-internal/i18n";
 import { useCopyHttpResponse } from "../../hooks/useCopyHttpResponse";
-import { useResponseBodyText } from "../../hooks/useResponseBodyText";
+import { responseBodyTextQuery, useResponseBodyText } from "../../hooks/useResponseBodyText";
+import { useResponseFilter } from "../../hooks/useResponseFilter";
 import { useSaveResponse } from "../../hooks/useSaveResponse";
 import { languageFromContentType } from "../../lib/contentType";
 import { generateId } from "../../lib/generateId";
@@ -64,23 +66,19 @@ interface HttpTextViewerProps {
 
 function HttpTextViewer({ response, text, language, pretty, className }: HttpTextViewerProps) {
   const { t } = useTranslation();
-  const [currentFilter, setCurrentFilter] = useState<string | null>(null);
-  const filteredBody = useResponseBodyText({ response, filter: currentFilter });
+  const queryClient = useQueryClient();
+  const filter = useResponseFilter({
+    stateKey: `response.body.${response.requestId}`,
+    // Shares the display query's cache entry, so the verdict costs no extra RPC
+    runFilter: useCallback(
+      (f: string) => queryClient.fetchQuery(responseBodyTextQuery({ response, filter: f })),
+      [queryClient, response],
+    ),
+  });
+  const filteredBody = useResponseBodyText({ response, filter: filter.appliedFilter });
   const saveResponse = useSaveResponse(response);
   const copyResponse = useCopyHttpResponse(response);
   const actionsDisabled = response.state !== "closed" && response.status >= 100;
-
-  const filterCallback = useMemo(
-    () => (filter: string) => {
-      setCurrentFilter(filter);
-      return {
-        data: filteredBody.data,
-        isPending: filteredBody.isPending,
-        error: !!filteredBody.error,
-      };
-    },
-    [filteredBody],
-  );
 
   const handleExtractJsonPath = useCallback(
     async (result: JsonPathAtPosition) => {
@@ -141,7 +139,6 @@ function HttpTextViewer({ response, text, language, pretty, className }: HttpTex
       text={text}
       language={language}
       stateKey={`response.body.${response.id}`}
-      filterStateKey={`response.body.${response.requestId}`}
       pretty={pretty}
       className={className}
       footerActions={[
@@ -164,7 +161,12 @@ function HttpTextViewer({ response, text, language, pretty, className }: HttpTex
           className="border !border-border-subtle"
         />,
       ]}
-      onFilter={filterCallback}
+      filter={filter}
+      filterResult={{
+        data: filteredBody.data,
+        isPending: filteredBody.isPending,
+        error: !!filteredBody.error,
+      }}
       onExtractJsonPath={handleExtractJsonPath}
     />
   );

@@ -1,5 +1,5 @@
-use super::{conflict_free_name, dedupe_headers};
-use crate::client_db::ClientDb;
+use super::{conflict_free_name, merge_headers};
+use crate::client_db::{ClientDb, WriteDb};
 use crate::error::Result;
 use crate::models::{
     AnyModel, Folder, FolderIden, GrpcRequest, GrpcRequestIden, HttpRequestHeader,
@@ -32,6 +32,78 @@ impl<'a> ClientDb<'a> {
         Ok(children)
     }
 
+    pub fn resolve_auth_for_grpc_request(
+        &self,
+        grpc_request: &GrpcRequest,
+    ) -> Result<(Option<String>, BTreeMap<String, Value>, String)> {
+        if let Some(at) = grpc_request.authentication_type.clone() {
+            return Ok((Some(at), grpc_request.authentication.clone(), grpc_request.id.clone()));
+        }
+
+        if let Some(folder_id) = grpc_request.folder_id.clone() {
+            let folder = self.get_folder(&folder_id)?;
+            return self.resolve_auth_for_folder(&folder);
+        }
+
+        let workspace = self.get_workspace(&grpc_request.workspace_id)?;
+        Ok(self.resolve_auth_for_workspace(&workspace))
+    }
+
+    pub fn resolve_metadata_for_grpc_request(
+        &self,
+        grpc_request: &GrpcRequest,
+    ) -> Result<Vec<HttpRequestHeader>> {
+        // Resolved headers should be from furthest to closest ancestor, to override logically.
+        let mut metadata = Vec::new();
+
+        if let Some(folder_id) = grpc_request.folder_id.clone() {
+            let parent_folder = self.get_folder(&folder_id)?;
+            let mut folder_headers = self.resolve_headers_for_folder(&parent_folder)?;
+            metadata.append(&mut folder_headers);
+        } else {
+            let workspace = self.get_workspace(&grpc_request.workspace_id)?;
+            let mut workspace_metadata = self.resolve_headers_for_workspace(&workspace);
+            metadata.append(&mut workspace_metadata);
+        }
+
+        Ok(merge_headers(metadata, grpc_request.metadata.clone()))
+    }
+
+    pub fn resolve_settings_for_grpc_request(
+        &self,
+        grpc_request: &GrpcRequest,
+    ) -> Result<ResolvedHttpRequestSettings> {
+        let parent = if let Some(folder_id) = grpc_request.folder_id.clone() {
+            let folder = self.get_folder(&folder_id)?;
+            self.resolve_settings_for_folder(&folder)?
+        } else {
+            let workspace = self.get_workspace(&grpc_request.workspace_id)?;
+            self.resolve_settings_for_workspace(&workspace)
+        };
+
+        Ok(ResolvedHttpRequestSettings {
+            validate_certificates: if grpc_request.setting_validate_certificates.enabled {
+                ResolvedSetting::from_model(
+                    grpc_request.setting_validate_certificates.value,
+                    AnyModel::GrpcRequest(grpc_request.clone()),
+                )
+            } else {
+                parent.validate_certificates
+            },
+            request_message_size: if grpc_request.setting_request_message_size.enabled {
+                ResolvedSetting::from_model(
+                    grpc_request.setting_request_message_size.value,
+                    AnyModel::GrpcRequest(grpc_request.clone()),
+                )
+            } else {
+                parent.request_message_size
+            },
+            ..parent
+        })
+    }
+}
+
+impl<'a> WriteDb<'a> {
     pub fn delete_grpc_request(
         &self,
         m: &GrpcRequest,
@@ -74,77 +146,5 @@ impl<'a> ClientDb<'a> {
         source: &UpdateSource,
     ) -> Result<GrpcRequest> {
         self.upsert(grpc_request, source)
-    }
-
-    pub fn resolve_auth_for_grpc_request(
-        &self,
-        grpc_request: &GrpcRequest,
-    ) -> Result<(Option<String>, BTreeMap<String, Value>, String)> {
-        if let Some(at) = grpc_request.authentication_type.clone() {
-            return Ok((Some(at), grpc_request.authentication.clone(), grpc_request.id.clone()));
-        }
-
-        if let Some(folder_id) = grpc_request.folder_id.clone() {
-            let folder = self.get_folder(&folder_id)?;
-            return self.resolve_auth_for_folder(&folder);
-        }
-
-        let workspace = self.get_workspace(&grpc_request.workspace_id)?;
-        Ok(self.resolve_auth_for_workspace(&workspace))
-    }
-
-    pub fn resolve_metadata_for_grpc_request(
-        &self,
-        grpc_request: &GrpcRequest,
-    ) -> Result<Vec<HttpRequestHeader>> {
-        // Resolved headers should be from furthest to closest ancestor, to override logically.
-        let mut metadata = Vec::new();
-
-        if let Some(folder_id) = grpc_request.folder_id.clone() {
-            let parent_folder = self.get_folder(&folder_id)?;
-            let mut folder_headers = self.resolve_headers_for_folder(&parent_folder)?;
-            metadata.append(&mut folder_headers);
-        } else {
-            let workspace = self.get_workspace(&grpc_request.workspace_id)?;
-            let mut workspace_metadata = self.resolve_headers_for_workspace(&workspace);
-            metadata.append(&mut workspace_metadata);
-        }
-
-        metadata.append(&mut grpc_request.metadata.clone());
-
-        Ok(dedupe_headers(metadata))
-    }
-
-    pub fn resolve_settings_for_grpc_request(
-        &self,
-        grpc_request: &GrpcRequest,
-    ) -> Result<ResolvedHttpRequestSettings> {
-        let parent = if let Some(folder_id) = grpc_request.folder_id.clone() {
-            let folder = self.get_folder(&folder_id)?;
-            self.resolve_settings_for_folder(&folder)?
-        } else {
-            let workspace = self.get_workspace(&grpc_request.workspace_id)?;
-            self.resolve_settings_for_workspace(&workspace)
-        };
-
-        Ok(ResolvedHttpRequestSettings {
-            validate_certificates: if grpc_request.setting_validate_certificates.enabled {
-                ResolvedSetting::from_model(
-                    grpc_request.setting_validate_certificates.value,
-                    AnyModel::GrpcRequest(grpc_request.clone()),
-                )
-            } else {
-                parent.validate_certificates
-            },
-            request_message_size: if grpc_request.setting_request_message_size.enabled {
-                ResolvedSetting::from_model(
-                    grpc_request.setting_request_message_size.value,
-                    AnyModel::GrpcRequest(grpc_request.clone()),
-                )
-            } else {
-                parent.request_message_size
-            },
-            ..parent
-        })
     }
 }

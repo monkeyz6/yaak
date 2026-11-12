@@ -25,7 +25,6 @@ export function useExportData() {
         id: "export-data",
         title: t("mainMenu.exportData"),
         size: "md",
-        noPadding: true,
         render: ({ hide }) => (
           <ExportDataDialog
             onHide={hide}

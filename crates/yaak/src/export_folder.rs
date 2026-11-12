@@ -76,9 +76,27 @@ pub struct ExportFolderParams<'a> {
 }
 
 pub fn export_folder(params: ExportFolderParams<'_>) -> Result<ExportFolderResult> {
-    let db = params.query_manager.connect();
-    let mut collected = collect_folder(&db, params.folder_id)?;
-    let (value, extra_skipped, exported_count) = match params.format {
+    let (document, result) =
+        build_folder_export(params.query_manager, params.folder_id, params.format)?;
+
+    let file = File::options().create(true).truncate(true).write(true).open(params.export_path)?;
+    serde_json::to_writer_pretty(&file, &document)?;
+    file.sync_all()?;
+
+    Ok(result)
+}
+
+/// Build the exported collection document without writing it anywhere, for hosts that
+/// hand the bytes to the user themselves.
+pub fn build_folder_export(
+    query_manager: &QueryManager,
+    folder_id: &str,
+    format: CollectionFormat,
+) -> Result<(serde_json::Value, ExportFolderResult)> {
+    let db = query_manager.connect();
+    let mut collected = collect_folder(&db, folder_id)?;
+    drop(db);
+    let (value, extra_skipped, exported_count) = match format {
         CollectionFormat::Postman => {
             let (value, count) = to_postman(&collected)?;
             (value, Vec::new(), count)
@@ -87,11 +105,7 @@ pub fn export_folder(params: ExportFolderParams<'_>) -> Result<ExportFolderResul
     };
     collected.skipped.extend(extra_skipped);
 
-    let file = File::options().create(true).truncate(true).write(true).open(params.export_path)?;
-    serde_json::to_writer_pretty(&file, &value)?;
-    file.sync_all()?;
-
-    Ok(ExportFolderResult { exported_count, skipped: collected.skipped })
+    Ok((value, ExportFolderResult { exported_count, skipped: collected.skipped }))
 }
 
 fn collect_folder(db: &ClientDb<'_>, folder_id: &str) -> Result<FolderExport> {

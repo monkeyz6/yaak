@@ -1,6 +1,4 @@
-import { useSearch } from "@tanstack/react-router";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type } from "@tauri-apps/plugin-os";
+import { platform } from "@yaakapp-internal/platform";
 import { useLicense } from "@yaakapp-internal/license";
 import { useTranslation } from "@yaakapp-internal/i18n";
 import { pluginsAtom, settingsAtom } from "@yaakapp-internal/models";
@@ -21,6 +19,8 @@ import { SettingsProxy } from "./SettingsProxy";
 import { SettingsTheme } from "./SettingsTheme";
 
 interface Props {
+  tab?: SettingsTabWithSubtab | null;
+  /** Set when Settings is in a dialog rather than owning a window. */
   hide?: () => void;
 }
 
@@ -43,26 +43,20 @@ const tabs = [
   TAB_LICENSE,
 ] as const;
 export type SettingsTab = (typeof tabs)[number];
+export type SettingsTabWithSubtab = SettingsTab | `${SettingsTab}:${string}`;
 
-export default function Settings({ hide }: Props) {
+export default function Settings({ tab, hide }: Props) {
   const { t } = useTranslation();
-  const { tab: tabFromQuery } = useSearch({ from: "/workspaces/$workspaceId/settings" });
   // Parse tab and subtab (e.g., "plugins:installed")
-  const [mainTab, subtab] = tabFromQuery?.split(":") ?? [];
+  const [mainTab, subtab] = tab?.split(":") ?? [];
   const settings = useAtomValue(settingsAtom);
   const plugins = useAtomValue(pluginsAtom);
   const licenseCheck = useLicense();
 
-  // Close settings window on escape
+  // Close settings window on escape. In a dialog, the dialog handles Escape itself.
   // TODO: Could this be put in a better place? Eg. in Rust key listener when creating the window
   useKeyPressEvent("Escape", async () => {
-    if (hide != null) {
-      // It's being shown in a dialog, so close the dialog
-      hide();
-    } else {
-      // It's being shown in a window, so close the window
-      await getCurrentWebviewWindow().close();
-    }
+    if (hide == null) await platform.window.close();
   });
 
   return (
@@ -76,7 +70,7 @@ export default function Settings({ hide }: Props) {
           onlyXWindowControl
           size="md"
           className="x-theme-appHeader bg-surface text-text-subtle flex items-center justify-center border-b border-border-subtle text-sm font-semibold"
-          osType={type()}
+          osType={platform.osType()}
           hideWindowControls={settings.hideWindowControls}
           useNativeTitlebar={settings.useNativeTitlebar}
           interfaceScale={settings.interfaceScale}
@@ -92,7 +86,7 @@ export default function Settings({ hide }: Props) {
             justifyContent="center"
             className="w-full h-full grid grid-cols-[1fr_auto] pointer-events-none"
           >
-            <div className={classNames(type() === "macos" ? "text-center" : "pl-2")}>
+            <div className={classNames(platform.osType() === "macos" ? "text-center" : "pl-2")}>
               {t("common.settings")}
             </div>
           </HStack>
@@ -100,45 +94,43 @@ export default function Settings({ hide }: Props) {
       )}
       <Tabs
         layout="horizontal"
-        defaultValue={mainTab || tabFromQuery}
+        defaultValue={mainTab}
         addBorders
         tabListClassName="min-w-40 bg-surface x-theme-sidebar border-r border-border pl-3"
         label={t("common.settings")}
-        tabs={tabs.map(
-          (value): TabItem => ({
-            value,
-            label: t(`settings.${value}`),
-            hidden: !appInfo.featureLicense && value === TAB_LICENSE,
-            leftSlot:
-              value === TAB_GENERAL ? (
-                <Icon icon="settings" className="text-secondary" />
-              ) : value === TAB_THEME ? (
-                <Icon icon="palette" className="text-secondary" />
-              ) : value === TAB_INTERFACE ? (
-                <Icon icon="columns_2" className="text-secondary" />
-              ) : value === TAB_SHORTCUTS ? (
-                <Icon icon="keyboard" className="text-secondary" />
-              ) : value === TAB_CERTIFICATES ? (
-                <Icon icon="shield_check" className="text-secondary" />
-              ) : value === TAB_PROXY ? (
-                <Icon icon="wifi" className="text-secondary" />
-              ) : value === TAB_PLUGINS ? (
-                <Icon icon="puzzle" className="text-secondary" />
-              ) : value === TAB_LICENSE ? (
-                <Icon icon="key_round" className="text-secondary" />
-              ) : null,
-            rightSlot:
-              value === TAB_CERTIFICATES ? (
-                <CountBadge count={settings.clientCertificates.length} />
-              ) : value === TAB_PLUGINS ? (
-                <CountBadge count={plugins.filter((p) => p.source !== "bundled").length} />
-              ) : value === TAB_PROXY && settings.proxy?.type === "enabled" ? (
-                <CountBadge count />
-              ) : value === TAB_LICENSE && licenseCheck.check.data?.status === "personal_use" ? (
-                <CountBadge count color="notice" />
-              ) : null,
-          }),
-        )}
+        tabs={tabs.map((value): TabItem => ({
+          value,
+          label: t(`settings.${value}`),
+          hidden: !appInfo.featureLicense && value === TAB_LICENSE,
+          leftSlot:
+            value === TAB_GENERAL ? (
+              <Icon icon="settings" className="text-secondary" />
+            ) : value === TAB_THEME ? (
+              <Icon icon="palette" className="text-secondary" />
+            ) : value === TAB_INTERFACE ? (
+              <Icon icon="columns_2" className="text-secondary" />
+            ) : value === TAB_SHORTCUTS ? (
+              <Icon icon="keyboard" className="text-secondary" />
+            ) : value === TAB_CERTIFICATES ? (
+              <Icon icon="shield_check" className="text-secondary" />
+            ) : value === TAB_PROXY ? (
+              <Icon icon="wifi" className="text-secondary" />
+            ) : value === TAB_PLUGINS ? (
+              <Icon icon="puzzle" className="text-secondary" />
+            ) : value === TAB_LICENSE ? (
+              <Icon icon="key_round" className="text-secondary" />
+            ) : null,
+          rightSlot:
+            value === TAB_CERTIFICATES ? (
+              <CountBadge count={settings.clientCertificates.length} />
+            ) : value === TAB_PLUGINS ? (
+              <CountBadge count={plugins.filter((p) => p.source !== "bundled").length} />
+            ) : value === TAB_PROXY && settings.proxy?.type === "enabled" ? (
+              <CountBadge count />
+            ) : value === TAB_LICENSE && licenseCheck.check.data?.status === "personal_use" ? (
+              <CountBadge count color="notice" />
+            ) : null,
+        }))}
       >
         <TabContent value={TAB_GENERAL} className="overflow-y-auto h-full px-6 py-4!">
           <SettingsGeneral />

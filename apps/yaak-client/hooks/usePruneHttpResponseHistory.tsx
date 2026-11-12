@@ -5,7 +5,7 @@ import { showConfirmDelete } from "../lib/confirm";
 import { jotaiStore } from "../lib/jotai";
 import { getKeyValue } from "../lib/keyValueStore";
 import { collectHttpResponseKeepIds } from "../lib/pruneHttpResponses";
-import { invokeCmd } from "../lib/tauri";
+import { rpc } from "../lib/rpc";
 import { activeWorkspaceIdAtom } from "./useActiveWorkspace";
 import { useFastMutation } from "./useFastMutation";
 
@@ -46,7 +46,7 @@ export function usePruneHttpResponseHistory() {
       const workspaceId = jotaiStore.get(activeWorkspaceIdAtom);
       if (workspaceId == null) return false;
 
-      await invokeCmd("cmd_prune_http_responses", { workspaceId, keepIds });
+      await rpc("cmd_prune_http_responses", { workspaceId, keepIds });
       return true;
     },
   });
