@@ -31,7 +31,7 @@ import type { HotkeyAction } from "../../hooks/useHotKey";
 import { useHotKey } from "../../hooks/useHotKey";
 import { useStateWithDeps } from "../../hooks/useStateWithDeps";
 import { generateId } from "../../lib/generateId";
-import { getNodeText } from "../../lib/getNodeText";
+import { filterMenuItems, isComposing, isNavigableItem, stepSelection } from "./Dropdown.util";
 import { jotaiStore } from "../../lib/jotai";
 import { fireAndForget } from "../../lib/fireAndForget";
 import { ErrorBoundary } from "../ErrorBoundary";
@@ -88,6 +88,11 @@ export interface DropdownProps {
   fullWidth?: boolean;
   hotKeyAction?: HotkeyAction;
   onOpen?: () => void;
+  /**
+   * Always show the type-to-filter row (with this placeholder) instead of only once the user
+   * starts typing. For long, searchable lists.
+   */
+  filterPlaceholder?: string;
 }
 
 export interface DropdownRef {
@@ -106,7 +111,7 @@ export interface DropdownRef {
 const openAtom = atom<string | null>(null);
 
 export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown(
-  { children, items, hotKeyAction, fullWidth, onOpen }: DropdownProps,
+  { children, items, hotKeyAction, fullWidth, onOpen, filterPlaceholder }: DropdownProps,
   ref,
 ) {
   const id = useRef(generateId());
@@ -236,6 +241,7 @@ export const Dropdown = forwardRef<DropdownRef, DropdownProps>(function Dropdown
           triggerShape={triggerRect ?? null}
           onClose={() => handleSetIsOpen(false)}
           isOpen={isOpen}
+          filterPlaceholder={filterPlaceholder}
         />
       </ErrorBoundary>
     </>
@@ -313,6 +319,7 @@ interface MenuProps {
   // used to ask whether a click landed on the trigger
   triggerRef?: RefObject<HTMLElement | null>;
   isSubmenu?: boolean;
+  filterPlaceholder?: string;
 }
 
 const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items">, MenuProps>(
@@ -329,6 +336,7 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
       showTriangle,
       triggerRef,
       isSubmenu,
+      filterPlaceholder,
     }: MenuProps,
     ref,
   ) => {
@@ -339,6 +347,11 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
     );
 
     const [filter, setFilter] = useState<string>("");
+    // Navigation, highlighting and Enter all index into the filtered list
+    const filteredItems = useMemo(() => filterMenuItems(items, filter), [items, filter]);
+    // A searchable menu keeps DOM focus in a real <input>; items are highlighted "virtually"
+    const searchable = filterPlaceholder != null;
+    const searchInputRef = useRef<HTMLInputElement>(null);
 
     // Clear filter when menu opens
     useEffect(() => {
@@ -385,6 +398,15 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
 
       const isCharacter = e.key.length === 1;
       const isSpecial = e.ctrlKey || e.metaKey || e.altKey;
+      if (searchable) {
+        // The input handles its own typing (incl. IME and paste). If focus somehow left it, send
+        // the keystroke back: focusing during keydown lets the character land in the input.
+        const input = searchInputRef.current;
+        if (input != null && e.target !== input && !isSpecial) {
+          if (isCharacter || e.key === "Backspace") input.focus();
+        }
+        return;
+      }
       if (isCharacter && !isSpecial) {
         e.preventDefault();
         setFilter((f) => f + e.key);
@@ -397,8 +419,8 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
 
     useKey(
       "Escape",
-      () => {
-        if (!isOpen) return;
+      (e) => {
+        if (!isOpen || isComposing(e)) return;
         if (activeSubmenu) setActiveSubmenu(null);
         else if (filter !== "") setFilter("");
         else handleClose();
@@ -409,56 +431,30 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
 
     const handlePrev = useCallback(
       (incrBy = 1) => {
-        setSelectedIndex((currIndex) => {
-          let nextIndex = (currIndex ?? 0) - incrBy;
-          const maxTries = items.length;
-          for (let i = 0; i < maxTries; i++) {
-            if (items[nextIndex]?.hidden || items[nextIndex]?.type === "separator") {
-              nextIndex--;
-            } else if (nextIndex < 0) {
-              nextIndex = items.length - 1;
-            } else {
-              break;
-            }
-          }
-          return nextIndex;
-        });
+        setSelectedIndex((currIndex) => stepSelection(filteredItems, currIndex, -incrBy));
       },
-      [items, setSelectedIndex],
+      [filteredItems, setSelectedIndex],
     );
 
     const handleNext = useCallback(
       (incrBy = 1) => {
-        setSelectedIndex((currIndex) => {
-          let nextIndex = (currIndex ?? -1) + incrBy;
-          const maxTries = items.length;
-          for (let i = 0; i < maxTries; i++) {
-            if (items[nextIndex]?.hidden || items[nextIndex]?.type === "separator") {
-              nextIndex++;
-            } else if (nextIndex >= items.length) {
-              nextIndex = 0;
-            } else {
-              break;
-            }
-          }
-          return nextIndex;
-        });
+        setSelectedIndex((currIndex) => stepSelection(filteredItems, currIndex, incrBy));
       },
-      [items, setSelectedIndex],
+      [filteredItems, setSelectedIndex],
     );
 
     // Ensure selection is on a valid item (not hidden/separator/content)
     useEffect(() => {
-      const item = items[selectedIndex ?? -1];
+      const item = filteredItems[selectedIndex ?? -1];
       if (item?.hidden || item?.type === "separator" || item?.type === "content") {
         handleNext();
       }
-    }, [selectedIndex, items, handleNext]);
+    }, [selectedIndex, filteredItems, handleNext]);
 
     useKey(
       "ArrowUp",
       (e) => {
-        if (!isOpen || activeSubmenu) return;
+        if (!isOpen || activeSubmenu || isComposing(e)) return;
         e.preventDefault();
         handlePrev();
       },
@@ -469,7 +465,7 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
     useKey(
       "ArrowDown",
       (e) => {
-        if (!isOpen || activeSubmenu) return;
+        if (!isOpen || activeSubmenu || isComposing(e)) return;
         e.preventDefault();
         handleNext();
       },
@@ -610,11 +606,6 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
       };
     }, [fullWidth, items.length, triggerShape, isSubmenu]);
 
-    const filteredItems = useMemo(
-      () => items.filter((i) => getNodeText(i.label).toLowerCase().includes(filter.toLowerCase())),
-      [items, filter],
-    );
-
     const handleFocus = useCallback(
       (i: DropdownItem) => {
         const index = filteredItems.indexOf(i) ?? null;
@@ -643,7 +634,7 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
     useKey(
       "Enter",
       (e) => {
-        if (!isOpen || activeSubmenu) return;
+        if (!isOpen || activeSubmenu || isComposing(e)) return;
         const item = filteredItems[selectedIndex ?? -1];
         if (!item || item.type === "separator" || item.type === "content") return;
         e.preventDefault();
@@ -715,10 +706,27 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
 
     // Keep focus on menu container when filtering leaves no items
     useEffect(() => {
+      if (searchable) return; // Focus belongs to the search input
       if (filteredItems.length === 0 && filter && menuRef.current) {
         menuRef.current.focus();
       }
-    }, [filteredItems.length, filter]);
+    }, [filteredItems.length, filter, searchable]);
+
+    // Searchable menus focus their input on open, so typing works without clicking it first
+    useEffect(() => {
+      if (!isOpen || !searchable) return;
+      const frame = requestAnimationFrame(() =>
+        searchInputRef.current?.focus({ preventScroll: true }),
+      );
+      return () => cancelAnimationFrame(frame);
+    }, [isOpen, searchable]);
+
+    const handleSearchChange = (value: string) => {
+      setFilter(value);
+      // Highlight the first match so Enter picks it
+      const firstMatch = filterMenuItems(items, value).findIndex(isNavigableItem);
+      setSelectedIndex(value === "" || firstMatch === -1 ? null : firstMatch);
+    };
 
     const submenuTriggerShape = useMemo(() => {
       if (!activeSubmenu) return null;
@@ -774,14 +782,45 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
             "border-border-subtle overflow-y-auto overflow-x-hidden mx-0.5",
           )}
         >
-          {filter && (
-            <HStack
-              space={2}
-              className="pb-0.5 px-1.5 mb-2 text-sm border border-border-subtle mx-2 rounded-sm font-mono h-xs"
+          {searchable ? (
+            <label
+              className={classNames(
+                "mx-2 mb-2 h-xs px-1.5 flex items-center gap-2 shrink-0",
+                "rounded-sm border border-border-subtle cursor-text",
+                "focus-within:border-border-focus",
+                // Stays put while a long list scrolls under it. The ring paints over the gap
+                // around it so items don't show through.
+                "sticky top-0 z-10 bg-surface ring-[6px] ring-surface",
+              )}
             >
-              <Icon icon="search" size="xs" />
-              <div className="text">{filter}</div>
-            </HStack>
+              <Icon icon="search" size="xs" className="text-text-subtle shrink-0" />
+              <input
+                ref={searchInputRef}
+                value={filter}
+                placeholder={filterPlaceholder}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                // Global hotkeys must not fire while typing a search
+                data-disable-hotkey
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className={classNames(
+                  "flex-1 min-w-0 h-full bg-transparent outline-hidden",
+                  "text-sm font-mono placeholder:font-sans placeholder:text-text-subtlest",
+                )}
+              />
+            </label>
+          ) : (
+            filter && (
+              <HStack
+                space={2}
+                className="pb-0.5 px-1.5 mb-2 text-sm border border-border-subtle mx-2 rounded-sm font-mono h-xs"
+              >
+                <Icon icon="search" size="xs" />
+                <div className="text">{filter}</div>
+              </HStack>
+            )
           )}
           {filteredItems.length === 0 && (
             <span className="text-text-subtlest text-center px-2 py-1">
@@ -816,6 +855,7 @@ const Menu = forwardRef<Omit<DropdownRef, "open" | "isOpen" | "toggle" | "items"
             return (
               <MenuItem
                 focused={i === selectedIndex}
+                virtualFocus={searchable}
                 isParentOfActiveSubmenu={isParentOfActiveSubmenu}
                 onFocus={handleFocus}
                 onSelect={handleSelect}
@@ -894,6 +934,11 @@ interface MenuItemProps {
   onHover: (item: DropdownItemDefault, el: HTMLButtonElement) => void;
   onOpenSubmenu: (item: DropdownItemDefault, el: HTMLButtonElement) => void;
   focused: boolean;
+  /**
+   * Highlight via `focused` instead of moving DOM focus, so focus can stay in a search input.
+   * Hover and arrow keys move the highlight; clicks don't steal focus.
+   */
+  virtualFocus?: boolean;
   isParentOfActiveSubmenu?: boolean;
 }
 
@@ -906,6 +951,7 @@ function MenuItem({
   onSelect,
   onOpenSubmenu,
   isParentOfActiveSubmenu,
+  virtualFocus,
   ...props
 }: MenuItemProps) {
   const { t } = useTranslation();
@@ -929,16 +975,17 @@ function MenuItem({
     (el: HTMLButtonElement | null) => {
       buttonRef.current = el;
       if (el === null) return;
-      if (focused) {
+      if (focused && !virtualFocus) {
         setTimeout(() => el.focus(), 0);
       }
     },
-    [focused],
+    [focused, virtualFocus],
   );
 
   const handleMouseEnter = (e: MouseEvent<HTMLButtonElement>) => {
     onHover(item, e.currentTarget);
-    e.currentTarget.focus();
+    if (virtualFocus) onFocus?.(item);
+    else e.currentTarget.focus();
   };
 
   const hasButtonSubmenu = item.submenu != null && item.submenuTrigger === "button";
@@ -956,7 +1003,9 @@ function MenuItem({
       size="sm"
       tabIndex={-1}
       onMouseEnter={hasButtonSubmenu ? undefined : handleMouseEnter}
-      onMouseLeave={hasButtonSubmenu ? undefined : (e) => e.currentTarget.blur()}
+      onMouseLeave={hasButtonSubmenu || virtualFocus ? undefined : (e) => e.currentTarget.blur()}
+      // Keep focus in the search input when clicking an item
+      onMouseDown={virtualFocus ? (e) => e.preventDefault() : undefined}
       disabled={item.disabled}
       onFocus={handleFocus}
       onClick={handleClick}
@@ -977,6 +1026,7 @@ function MenuItem({
         "min-w-32 outline-hidden px-2 mx-1.5 flex whitespace-nowrap",
         "focus:bg-surface-highlight focus:text rounded-sm focus:outline-hidden focus-visible:outline-1",
         isParentOfActiveSubmenu && "bg-surface-highlight text rounded-sm",
+        virtualFocus && focused && "bg-surface-highlight text",
         hasButtonSubmenu && "pr-8",
         item.color === "danger" && "text-danger!",
         item.color === "primary" && "text-primary!",

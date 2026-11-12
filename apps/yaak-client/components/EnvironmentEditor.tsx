@@ -4,7 +4,7 @@ import { patchModel } from "@yaakapp-internal/models";
 import type { GenericCompletionOption } from "@yaakapp-internal/plugins";
 import { Heading } from "@yaakapp-internal/ui";
 import classNames from "classnames";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useEnvironmentsBreakdown } from "../hooks/useEnvironmentsBreakdown";
 import { useIsEncryptionEnabled } from "../hooks/useIsEncryptionEnabled";
 import { useKeyValue } from "../hooks/useKeyValue";
@@ -37,6 +37,16 @@ interface Props {
 
 export function EnvironmentEditor({ environment, hideName, className, setRef }: Props) {
   const { t } = useTranslation();
+  const pairEditorRef = useRef<PairEditorHandle | null>(null);
+  const [emptyCount, setEmptyCount] = useState(0);
+  const handleEmptyCountChange = useCallback((count: number) => setEmptyCount(count), []);
+  const handleSetRef = useCallback(
+    (handle: PairEditorHandle | null) => {
+      pairEditorRef.current = handle;
+      setRef?.(handle);
+    },
+    [setRef],
+  );
   const workspaceId = environment.workspaceId;
   const isEncryptionEnabled = useIsEncryptionEnabled();
   const valueVisibility = useKeyValue<boolean>({
@@ -172,6 +182,15 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
           >
             {environment.public ? t("environment.sharable") : t("environment.private")}
           </PillButton>
+          {emptyCount > 0 && (
+            <PillButton
+              color="secondary"
+              title={t("pairEditor.removeEmptyTitle")}
+              onClick={() => pairEditorRef.current?.removeEmptyValues()}
+            >
+              {t("pairEditor.removeEmpty", { count: emptyCount })}
+            </PillButton>
+          )}
         </Heading>
         {environment.public && (!isEncryptionEnabled || !allVariableAreEncrypted) && (
           <DismissibleBanner
@@ -191,7 +210,10 @@ export function EnvironmentEditor({ environment, hideName, className, setRef }: 
         )}
       </div>
       <PairOrBulkEditor
-        setRef={setRef}
+        setRef={handleSetRef}
+        onEmptyCountChange={handleEmptyCountChange}
+        // The header pill is the entry point here; a second corner button would be noise
+        showEmptyCleanup={false}
         className="h-full"
         allowMultilineValues
         preferenceName="environment"

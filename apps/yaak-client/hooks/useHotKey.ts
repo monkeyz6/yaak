@@ -35,6 +35,7 @@ export type HotkeyAction =
   | "sidebar.expand_all"
   | "sidebar.collapse_all"
   | "sidebar.focus"
+  | "sidebar.auth_chips.toggle"
   | "sidebar.context_menu"
   | "url_bar.focus"
   | "workspace_settings.show";
@@ -65,6 +66,7 @@ const defaultHotkeysMac: Record<HotkeyAction, string[]> = {
   "sidebar.selected.move": [],
   "sidebar.selected.rename": ["Enter"],
   "sidebar.focus": ["Meta+b"],
+  "sidebar.auth_chips.toggle": ["Meta+Shift+a"],
   "sidebar.context_menu": ["Control+Enter"],
   "url_bar.focus": ["Meta+l"],
   "workspace_settings.show": ["Meta+;"],
@@ -96,6 +98,7 @@ const defaultHotkeysOther: Record<HotkeyAction, string[]> = {
   "sidebar.selected.move": [],
   "sidebar.selected.rename": ["Enter"],
   "sidebar.focus": ["Control+b"],
+  "sidebar.auth_chips.toggle": ["Control+Shift+a"],
   "sidebar.context_menu": ["Alt+Insert"],
   "url_bar.focus": ["Control+l"],
   "workspace_settings.show": ["Control+;"],
@@ -155,6 +158,7 @@ const hotkeyLabels: Record<HotkeyAction, string> = {
   "sidebar.selected.move": "Move Selected to Workspace",
   "sidebar.selected.rename": "Rename Selected Sidebar Item",
   "sidebar.focus": "Focus or Toggle Sidebar",
+  "sidebar.auth_chips.toggle": "Toggle Folder Auth Chips",
   "sidebar.context_menu": "Show Context Menu",
   "url_bar.focus": "Focus URL",
   "workspace_settings.show": "Open Workspace Settings",
@@ -185,6 +189,7 @@ const hotkeyLabelKeys: Record<HotkeyAction, string> = {
   "sidebar.selected.move": "hotkeys.actions.moveSelectedToWorkspace",
   "sidebar.selected.rename": "hotkeys.actions.renameSelectedSidebarItem",
   "sidebar.focus": "hotkeys.actions.focusOrToggleSidebar",
+  "sidebar.auth_chips.toggle": "hotkeys.actions.toggleFolderAuthChips",
   "sidebar.context_menu": "hotkeys.actions.showContextMenu",
   "url_bar.focus": "hotkeys.actions.focusUrl",
   "workspace_settings.show": "hotkeys.actions.openWorkspaceSettings",

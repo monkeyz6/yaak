@@ -44,6 +44,7 @@ import { useExportFolder } from "../hooks/useExportFolder";
 import { getFolderActions } from "../hooks/useFolderActions";
 import { getGrpcRequestActions } from "../hooks/useGrpcRequestActions";
 import { useHotKey } from "../hooks/useHotKey";
+import { useKeyValue } from "../hooks/useKeyValue";
 import { getHttpRequestActions } from "../hooks/useHttpRequestActions";
 import { platform } from "@yaakapp-internal/platform";
 import { usePlatformEvent } from "../hooks/usePlatformEvent";
@@ -57,6 +58,7 @@ import { deleteModelWithConfirm } from "../lib/deleteModelWithConfirm";
 import { showDialog } from "../lib/dialog";
 import { gitWorktreeStatusByModelIdAtom, gitWorktreeStatusFamily } from "../lib/gitWorktreeStatus";
 import { jotaiStore } from "../lib/jotai";
+import { showToast } from "../lib/toast";
 import { resolvedModelName } from "../lib/resolvedModelName";
 import { isSidebarFocused } from "../lib/scopes";
 import { navigateToRequestOrFolderOrWorkspace } from "../lib/setWorkspaceSearchParams";
@@ -67,6 +69,7 @@ import { filter } from "./core/Editor/filter/extension";
 import type { Ast } from "./core/Editor/filter/query";
 import { evaluate, parseQuery } from "./core/Editor/filter/query";
 import { formatFieldFilter } from "./core/Editor/filter/format";
+import { FolderAuthChip, sidebarFolderAuthChipsVisibleAtom } from "./FolderAuthChip";
 import { HttpMethodTag } from "./core/HttpMethodTag";
 import { HttpStatusTag } from "./core/HttpStatusTag";
 import {
@@ -108,6 +111,26 @@ const OPACITY_SUBTLE = "opacity-80";
 
 function Sidebar({ className }: { className?: string }) {
   const { t } = useTranslation();
+  const folderAuthChips = useKeyValue<boolean>({
+    namespace: "global",
+    key: "sidebarFolderAuthChips",
+    fallback: true,
+  });
+  const folderAuthChipsVisible = useAtomValue(sidebarFolderAuthChipsVisibleAtom);
+  useEffect(() => {
+    if (folderAuthChips.isLoading) return;
+    jotaiStore.set(sidebarFolderAuthChipsVisibleAtom, folderAuthChips.value ?? true);
+  }, [folderAuthChips.isLoading, folderAuthChips.value]);
+  const toggleFolderAuthChips = useCallback(() => {
+    const next = !(jotaiStore.get(sidebarFolderAuthChipsVisibleAtom) ?? true);
+    jotaiStore.set(sidebarFolderAuthChipsVisibleAtom, next);
+    void folderAuthChips.set(next);
+    showToast({
+      id: "sidebar-folder-auth-chips",
+      timeout: 3000,
+      message: t(next ? "folderAuth.chipsShown" : "folderAuth.chipsHidden"),
+    });
+  }, [folderAuthChips.set, t]);
   const exportFolder = useExportFolder();
   const [hidden, setHidden] = useSidebarHidden();
   const activeWorkspaceId = useAtomValue(activeWorkspaceAtom)?.id;
@@ -164,6 +187,8 @@ function Sidebar({ className }: { className?: string }) {
       enable: isSidebarFocused,
     },
   );
+
+  useHotKey("sidebar.auth_chips.toggle", toggleFolderAuthChips);
 
   useHotKey("sidebar.focus", async function focusHotkey() {
     // Hide the sidebar if it's already focused
@@ -588,7 +613,10 @@ function Sidebar({ className }: { className?: string }) {
     <aside
       ref={wrapperRef}
       aria-hidden={hidden ?? undefined}
-      className={classNames(className, "h-full grid grid-rows-[auto_minmax(0,1fr)_auto]")}
+      className={classNames(
+        className,
+        "@container/sidebar h-full grid grid-rows-[auto_minmax(0,1fr)_auto]",
+      )}
     >
       <div className="w-full pl-3 pr-0.5 pt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center">
         {(tree.children?.length ?? 0) > 0 && (
@@ -673,6 +701,13 @@ function Sidebar({ className }: { className?: string }) {
                   hotKeyAction: "sidebar.collapse_all",
                   hotKeyLabelOnly: true,
                 },
+                {
+                  label: t("folderAuth.toggleChipsMenu"),
+                  leftSlot: <Icon icon={folderAuthChipsVisible !== false ? "check" : "empty"} />,
+                  onSelect: toggleFolderAuthChips,
+                  hotKeyAction: "sidebar.auth_chips.toggle",
+                  hotKeyLabelOnly: true,
+                },
               ]}
             >
               <IconButton
@@ -736,6 +771,7 @@ function Sidebar({ className }: { className?: string }) {
           getItemKey={getItemKey}
           ItemInner={SidebarInnerItem}
           ItemLeftSlotInner={SidebarLeftSlot}
+          ItemRightSlot={SidebarItemRightSlot}
           getContextMenu={getContextMenu}
           renderContextMenu={renderContextMenuFn}
           onActivate={handleActivate}
@@ -1116,6 +1152,26 @@ const SidebarLeftSlot = memo(function SidebarLeftSlot({
     />
   );
 });
+
+const SidebarItemRightSlot = memo(function SidebarItemRightSlot({
+  treeId,
+  item,
+}: {
+  treeId: string;
+  item: SidebarModel;
+}) {
+  const visible = useAtomValue(sidebarFolderAuthChipsVisibleAtom);
+  if (visible !== true || item.model !== "folder") return null;
+  return <SidebarFolderAuthChip treeId={treeId} folderId={item.id} />;
+});
+
+// Split out so only folder rows subscribe to their selection state
+function SidebarFolderAuthChip({ treeId, folderId }: { treeId: string; folderId: string }) {
+  // The tree keeps a single tab stop (the selected row). Only that row's chip joins the tab
+  // order, so Tab doesn't have to walk through every chip to leave the sidebar.
+  const isSelected = useAtomValue(isSelectedFamily({ treeId, itemId: folderId }));
+  return <FolderAuthChip folderId={folderId} tabbable={isSelected} />;
+}
 
 const SidebarInnerItem = memo(function SidebarInnerItem({
   item,
