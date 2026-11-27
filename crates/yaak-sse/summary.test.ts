@@ -67,6 +67,43 @@ describe("computeReadableSseText", () => {
     expect(computeReadableSseText(text, "auto").summary).toBe("hello");
   });
 
+  it("auto-detects Gemini Generate Content streams", () => {
+    const text = [
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "hello" }], role: "model" }, index: 0 }] })}`,
+      "",
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: " world" }], role: "model" }, finishReason: "STOP", index: 0 }], usageMetadata: { totalTokenCount: 12 } })}`,
+      "",
+      "data: [DONE]",
+    ].join("\n");
+    expect(computeReadableSseText(text, "auto")).toEqual({
+      fragmentCount: 2,
+      summary: "hello world",
+      detectedMode: "gemini",
+      reasoning: "",
+      reasoningFragmentCount: 0,
+    });
+  });
+
+  it("separates Gemini thoughts and ignores non-text parts", () => {
+    const text = [
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ thought: true, text: "thinking..." }], role: "model" }, index: 0 }] })}`,
+      "",
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "answer" }, { thoughtSignature: "signature" }, { inlineData: { mimeType: "image/png", data: "..." } }], role: "model" }, finishReason: "STOP", index: 0 }] })}`,
+    ].join("\n");
+    const result = computeReadableSseText(text, "auto");
+    expect(result.detectedMode).toBe("gemini");
+    expect(result.summary).toBe("answer");
+    expect(result.reasoning).toBe("thinking...");
+    expect(result.reasoningFragmentCount).toBe(1);
+  });
+
+  it("concatenates multiple Gemini text parts in fixed mode", () => {
+    const text = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "hello " }, { text: "world" }], role: "model" }, index: 0 }] })}\n\n`;
+    const result = computeReadableSseText(text, "gemini");
+    expect(result.summary).toBe("hello world");
+    expect(result.detectedMode).toBeNull();
+  });
+
   it("supports multiline data and custom JSONPath", () => {
     const text = `data: {"delta":\ndata: "hello"}\n\n`;
     expect(computeReadableSseText(text, "custom_jsonpath", "$.delta").summary).toBe("hello");

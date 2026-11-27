@@ -150,6 +150,7 @@ function ActualEventStreamViewer({ response }: Props) {
               { label: "OpenAI Chat Completions", value: "openai_chat" },
               { label: "OpenAI Responses", value: "openai_responses" },
               { label: "Anthropic Messages", value: "anthropic" },
+              { label: "Gemini Generate Content", value: "gemini" },
               { label: t("sse.customJsonPath"), value: "custom_jsonpath" },
             ]}
             onChange={(value) => modeSetting.set(value)}
@@ -394,6 +395,7 @@ function readableModeLabel(mode: SseTextMode | null): string | null {
   if (mode === "openai_chat") return "OpenAI Chat Completions";
   if (mode === "openai_responses") return "OpenAI Responses";
   if (mode === "anthropic") return "Anthropic Messages";
+  if (mode === "gemini") return "Gemini Generate Content";
   return null;
 }
 

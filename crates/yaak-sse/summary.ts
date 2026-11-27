@@ -15,6 +15,7 @@ export type SseTextMode =
   | "openai_chat"
   | "openai_responses"
   | "anthropic"
+  | "gemini"
   | "custom_jsonpath";
 
 interface ParsedSsePayload {
@@ -223,6 +224,7 @@ function detectSseTextMode(events: ParsedSsePayload[]): SseTextMode | null {
       return "anthropic";
     }
     if (Array.isArray(parsed?.choices)) return "openai_chat";
+    if (Array.isArray(parsed?.candidates)) return "gemini";
   }
   return null;
 }
@@ -260,6 +262,10 @@ function extractReadableFragment(
     return parsed.delta.type === "text_delta" && typeof parsed.delta.text === "string"
       ? parsed.delta.text
       : null;
+  }
+
+  if (mode === "gemini") {
+    return extractGeminiText(parsed, false);
   }
   return null;
 }
@@ -303,7 +309,29 @@ function extractReasoningFragment(
       : null;
   }
 
+  if (mode === "gemini") {
+    return extractGeminiText(parsed, true);
+  }
+
   return null;
+}
+
+function extractGeminiText(parsed: Record<string, unknown>, thought: boolean): string | null {
+  const candidates = parsed.candidates;
+  if (!Array.isArray(candidates)) return null;
+
+  const fragments: string[] = [];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate) || !isRecord(candidate.content)) continue;
+    const parts = candidate.content.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      if (!isRecord(part) || typeof part.text !== "string") continue;
+      if ((part.thought === true) === thought) fragments.push(part.text);
+    }
+  }
+
+  return fragments.join("") || null;
 }
 
 function parseRecord(value: string): Record<string, unknown> | null {
